@@ -1,0 +1,18 @@
+SET FOREIGN_KEY_CHECKS = 0;
+DROP TABLE IF EXISTS `sequences`;
+DROP TABLE IF EXISTS `audit_logs`;
+DROP TABLE IF EXISTS `unlock_requests`;
+DROP TABLE IF EXISTS `vouchers`;
+DROP TABLE IF EXISTS `bank_closings`;
+DROP TABLE IF EXISTS `daily_closings`;
+DROP TABLE IF EXISTS `expenses`;
+DROP TABLE IF EXISTS `bank_transactions`;
+DROP TABLE IF EXISTS `cash_denominations`;
+DROP TABLE IF EXISTS `cash_transactions`;
+DROP TABLE IF EXISTS `donations`;
+DROP TABLE IF EXISTS `bank_accounts`;
+DROP TABLE IF EXISTS `schemes`;
+DROP TABLE IF EXISTS `donor_family_members`;
+DROP TABLE IF EXISTS `donors`;
+DROP TABLE IF EXISTS `users`;
+SET FOREIGN_KEY_CHECKS = 1;
