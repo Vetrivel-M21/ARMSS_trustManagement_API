@@ -13,6 +13,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type ExpenseHandler struct{}
@@ -160,7 +162,22 @@ func (h *ExpenseHandler) CreateExpense(c *gin.Context) {
 			return
 		}
 
-		if err := tx.Model(bankAccount).Update("current_balance", bankAccount.CurrentBalance.Sub(req.Amount)).Error; err != nil {
+		// Re-check the balance under a row lock inside the transaction — the
+		// check above (before the transaction started) is only advisory; this
+		// is the authoritative check, closing the race where two concurrent
+		// debits could otherwise both pass against the same stale balance.
+		var lockedAcc models.BankAccount
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&lockedAcc, bankAccount.ID).Error; err != nil {
+			tx.Rollback()
+			shared.SendAppError(c, http.StatusInternalServerError, "Failed to lock bank account for balance update")
+			return
+		}
+		if lockedAcc.CurrentBalance.LessThan(req.Amount) {
+			tx.Rollback()
+			shared.SendAppError(c, http.StatusBadRequest, fmt.Sprintf("Insufficient bank balance (Current: ₹%s, Expense: ₹%s)", lockedAcc.CurrentBalance.StringFixed(2), req.Amount.StringFixed(2)))
+			return
+		}
+		if err := tx.Model(&lockedAcc).Update("current_balance", gorm.Expr("current_balance - ?", req.Amount)).Error; err != nil {
 			tx.Rollback()
 			shared.SendAppError(c, http.StatusInternalServerError, "Failed to update bank balance")
 			return

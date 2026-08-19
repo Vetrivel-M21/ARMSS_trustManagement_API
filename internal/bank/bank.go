@@ -15,6 +15,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type BankHandler struct{}
@@ -60,6 +62,7 @@ func (h *BankHandler) CreateBankAccount(c *gin.Context) {
 		AccountNumberMasked: req.AccountNumberMasked,
 		IFSCCode:            req.IFSCCode,
 		Branch:              req.Branch,
+		Location:            req.Location,
 		OpeningBalance:      req.OpeningBalance,
 		QRCodePath:          req.QRCodePath,
 		CurrentBalance:      req.OpeningBalance, // Initialized to opening balance
@@ -129,6 +132,9 @@ func (h *BankHandler) UpdateBankAccount(c *gin.Context) {
 	}
 	if req.Branch != "" {
 		account.Branch = req.Branch
+	}
+	if req.Location != "" {
+		account.Location = req.Location
 	}
 	if req.QRCodePath != "" {
 		account.QRCodePath = req.QRCodePath
@@ -862,7 +868,23 @@ func (h *BankHandler) TransferFunds(c *gin.Context) {
 		shared.SendAppError(c, http.StatusInternalServerError, "Failed to record source bank debit")
 		return
 	}
-	if err := tx.Model(&fromAcc).Update("current_balance", fromAcc.CurrentBalance.Sub(req.Amount)).Error; err != nil {
+
+	// Re-check the source balance under a row lock inside the transaction —
+	// the check above (before the transaction started) is only advisory; this
+	// is the authoritative check, closing the race where two concurrent
+	// debits/transfers could otherwise both pass against the same stale balance.
+	var lockedFromAcc models.BankAccount
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&lockedFromAcc, fromAcc.ID).Error; err != nil {
+		tx.Rollback()
+		shared.SendAppError(c, http.StatusInternalServerError, "Failed to lock source bank account for balance update")
+		return
+	}
+	if lockedFromAcc.CurrentBalance.LessThan(req.Amount) {
+		tx.Rollback()
+		shared.SendAppError(c, http.StatusBadRequest, "Insufficient funds in source bank account.")
+		return
+	}
+	if err := tx.Model(&lockedFromAcc).Update("current_balance", gorm.Expr("current_balance - ?", req.Amount)).Error; err != nil {
 		tx.Rollback()
 		shared.SendAppError(c, http.StatusInternalServerError, "Failed to update source bank balance")
 		return
@@ -886,7 +908,7 @@ func (h *BankHandler) TransferFunds(c *gin.Context) {
 		shared.SendAppError(c, http.StatusInternalServerError, "Failed to record destination bank credit")
 		return
 	}
-	if err := tx.Model(&toAcc).Update("current_balance", toAcc.CurrentBalance.Add(req.Amount)).Error; err != nil {
+	if err := tx.Model(&toAcc).Update("current_balance", gorm.Expr("current_balance + ?", req.Amount)).Error; err != nil {
 		tx.Rollback()
 		shared.SendAppError(c, http.StatusInternalServerError, "Failed to update destination bank balance")
 		return

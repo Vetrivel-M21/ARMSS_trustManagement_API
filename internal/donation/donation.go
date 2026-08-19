@@ -14,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
+	"gorm.io/gorm"
 )
 
 type DonationHandler struct{}
@@ -216,8 +217,10 @@ func (h *DonationHandler) CreateDonation(c *gin.Context) {
 			return
 		}
 
-		// Update Bank Account Current Balance
-		if err := tx.Model(bankAccount).Update("current_balance", bankAccount.CurrentBalance.Add(req.Amount)).Error; err != nil {
+		// Update Bank Account Current Balance atomically at the row level (a
+		// precomputed literal here would be a lost-update race under concurrent
+		// donations against the same account).
+		if err := tx.Model(bankAccount).Update("current_balance", gorm.Expr("current_balance + ?", req.Amount)).Error; err != nil {
 			tx.Rollback()
 			shared.SendAppError(c, http.StatusInternalServerError, "Failed to update bank balance")
 			return

@@ -9,32 +9,34 @@ import (
 )
 
 type Config struct {
-	Port        string
-	AppEnv      string
-	DBHost      string
-	DBPort      string
-	DBUser      string
-	DBPassword  string
-	DBName      string
-	JWTSecret   string
-	Timezone    string
-	FrontendURL string
+	Port               string
+	AppEnv             string
+	DBHost             string
+	DBPort             string
+	DBUser             string
+	DBPassword         string
+	DBName             string
+	JWTSecret          string
+	Timezone           string
+	FrontendURL        string
+	CORSAllowedOrigins string
 }
 
 func LoadConfig() (*Config, error) {
 	_ = godotenv.Load() // Ignore error if .env is missing in production
 
 	cfg := &Config{
-		Port:        getEnv("PORT", "8080"),
-		AppEnv:      getEnv("APP_ENV", "development"),
-		DBHost:      getEnv("DB_HOST", "127.0.0.1"),
-		DBPort:      getEnv("DB_PORT", "3306"),
-		DBUser:      getEnv("DB_USER", "root"),
-		DBPassword:  getEnv("DB_PASSWORD", "Vetri@123"),
-		DBName:      getEnv("DB_NAME", "trust_management_db"),
-		JWTSecret:   getEnv("JWT_SECRET", "SUPER_SECRETKEY"),
-		Timezone:    getEnv("TIMEZONE", "Asia/Kolkata"),
-		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:5173"),
+		Port:               getEnv("PORT", "8080"),
+		AppEnv:             getEnv("APP_ENV", "development"),
+		DBHost:             getEnv("DB_HOST", "127.0.0.1"),
+		DBPort:             getEnv("DB_PORT", "3306"),
+		DBUser:             getEnv("DB_USER", "root"),
+		DBPassword:         getEnv("DB_PASSWORD", ""),
+		DBName:             getEnv("DB_NAME", "trust_management_db"),
+		JWTSecret:          getEnv("JWT_SECRET", ""),
+		Timezone:           getEnv("TIMEZONE", "Asia/Kolkata"),
+		FrontendURL:        getEnv("FRONTEND_URL", "http://localhost:5173"),
+		CORSAllowedOrigins: getEnv("CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000"),
 	}
 
 	// Secrets must never have a hardcoded fallback in source — fail fast instead.

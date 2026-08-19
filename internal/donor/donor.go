@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"trust-management/backend/internal/database"
@@ -19,6 +21,54 @@ type DonorHandler struct{}
 
 func NewDonorHandler() *DonorHandler {
 	return &DonorHandler{}
+}
+
+var (
+	nonDigitPattern      = regexp.MustCompile(`\D`)
+	tenDigitPattern      = regexp.MustCompile(`^\d{10}$`)
+	aadhaarDigitsPattern = regexp.MustCompile(`^\d{12}$`)
+	panPattern           = regexp.MustCompile(`^[A-Z]{5}[0-9]{4}[A-Z]$`)
+	pincodePattern       = regexp.MustCompile(`^\d{6}$`)
+)
+
+// normalizeAndValidateDonorIdentity strips common formatting (spaces,
+// hyphens, parens, a leading "91" country code) from phone/Aadhaar and
+// uppercases PAN, then validates each against its real-world format. All
+// four fields are optional here (Phone's non-empty-ness is separately
+// enforced by the DTO's `required` tag on create) — only non-empty values
+// are checked, so a donor with no Aadhaar/PAN/Pincode on file is unaffected.
+func normalizeAndValidateDonorIdentity(phone, aadhaar, pan, pincode string) (normPhone, normAadhaar, normPAN string, err error) {
+	normPhone = phone
+	if phone != "" {
+		digits := nonDigitPattern.ReplaceAllString(phone, "")
+		if len(digits) == 12 && strings.HasPrefix(digits, "91") {
+			digits = digits[2:]
+		}
+		if !tenDigitPattern.MatchString(digits) {
+			return "", "", "", fmt.Errorf("Phone number must be a valid 10-digit mobile number")
+		}
+		normPhone = digits
+	}
+
+	normAadhaar = aadhaar
+	if aadhaar != "" {
+		digits := nonDigitPattern.ReplaceAllString(aadhaar, "")
+		if !aadhaarDigitsPattern.MatchString(digits) {
+			return "", "", "", fmt.Errorf("Aadhaar number must be exactly 12 digits")
+		}
+		normAadhaar = digits
+	}
+
+	normPAN = strings.ToUpper(strings.TrimSpace(pan))
+	if normPAN != "" && !panPattern.MatchString(normPAN) {
+		return "", "", "", fmt.Errorf("PAN number must be in the format ABCDE1234F (5 letters, 4 digits, 1 letter)")
+	}
+
+	if pincode != "" && !pincodePattern.MatchString(pincode) {
+		return "", "", "", fmt.Errorf("Pincode must be exactly 6 digits")
+	}
+
+	return normPhone, normAadhaar, normPAN, nil
 }
 
 // GetDonors handles fetching donors with optional search query
@@ -66,6 +116,13 @@ func (h *DonorHandler) CreateDonor(c *gin.Context) {
 		shared.SendAppError(c, http.StatusBadRequest, err.Error())
 		return
 	}
+
+	normPhone, normAadhaar, normPAN, err := normalizeAndValidateDonorIdentity(req.Phone, req.AadhaarNumber, req.PANNumber, req.Pincode)
+	if err != nil {
+		shared.SendAppError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	req.Phone, req.AadhaarNumber, req.PANNumber = normPhone, normAadhaar, normPAN
 
 	var dob *time.Time
 	if req.DateOfBirth != "" {
@@ -185,6 +242,13 @@ func (h *DonorHandler) UpdateDonor(c *gin.Context) {
 		shared.SendAppError(c, http.StatusBadRequest, err.Error())
 		return
 	}
+
+	normPhone, normAadhaar, normPAN, err := normalizeAndValidateDonorIdentity(req.Phone, req.AadhaarNumber, req.PANNumber, req.Pincode)
+	if err != nil {
+		shared.SendAppError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	req.Phone, req.AadhaarNumber, req.PANNumber = normPhone, normAadhaar, normPAN
 
 	beforeData, _ := json.Marshal(donor)
 

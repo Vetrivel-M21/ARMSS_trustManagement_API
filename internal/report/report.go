@@ -209,19 +209,43 @@ func (h *ReportHandler) GetBirthdayReport(c *gin.Context) {
 		database.DB.First(&donor, fm.DonorID)
 
 		age := time.Now().Year() - fm.DateOfBirth.Year()
+		familyMemberID := fm.ID
 		items = append(items, dto.BirthdayItem{
-			Type:          "FAMILY_MEMBER",
-			DonorID:       donor.ID,
-			DonorName:     donor.FullName,
-			PersonName:    fm.FullName,
-			Phone:         donor.Phone,
-			Email:         donor.Email,
-			Relationship:  fm.Relationship,
-			DateOfBirth:   fm.DateOfBirth,
-			BirthdayDay:   fm.DateOfBirth.Day(),
-			BirthdayMonth: int(fm.DateOfBirth.Month()),
-			Age:           age,
+			Type:           "FAMILY_MEMBER",
+			DonorID:        donor.ID,
+			DonorName:      donor.FullName,
+			PersonName:     fm.FullName,
+			Phone:          donor.Phone,
+			Email:          donor.Email,
+			Relationship:   fm.Relationship,
+			DateOfBirth:    fm.DateOfBirth,
+			BirthdayDay:    fm.DateOfBirth.Day(),
+			BirthdayMonth:  int(fm.DateOfBirth.Month()),
+			Age:            age,
+			FamilyMemberID: &familyMemberID,
 		})
+	}
+
+	// 3. Fetch Donors with a wedding anniversary in target month
+	var anniversaryDonors []models.Donor
+	database.DB.Where("MONTH(anniversary_date) = ? AND is_active = ?", month, true).Find(&anniversaryDonors)
+	for _, d := range anniversaryDonors {
+		if d.AnniversaryDate != nil {
+			years := time.Now().Year() - d.AnniversaryDate.Year()
+			items = append(items, dto.BirthdayItem{
+				Type:          "ANNIVERSARY",
+				DonorID:       d.ID,
+				DonorName:     d.FullName,
+				PersonName:    d.FullName,
+				Phone:         d.Phone,
+				Email:         d.Email,
+				Relationship:  "SPOUSE",
+				DateOfBirth:   *d.AnniversaryDate,
+				BirthdayDay:   d.AnniversaryDate.Day(),
+				BirthdayMonth: int(d.AnniversaryDate.Month()),
+				Age:           years,
+			})
+		}
 	}
 
 	shared.SendSuccess(c, http.StatusOK, gin.H{

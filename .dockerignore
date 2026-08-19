@@ -1,0 +1,20 @@
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+
+*.exe
+*.exe~
+server.log
+*.log
+
+uploads/
+
+# Local deployment artifacts / stray duplicate found in this repo — never
+# belongs in the Docker build context.
+backend/
+backend.zip
+*.zip
+
+.claude

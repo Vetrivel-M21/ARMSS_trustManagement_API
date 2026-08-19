@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"trust-management/backend/internal/database"
@@ -106,6 +107,12 @@ func (h *UnlockHandler) ReviewUnlockRequest(c *gin.Context) {
 		return
 	}
 
+	status := strings.ToUpper(req.Status)
+	if status != "APPROVED" && status != "REJECTED" {
+		shared.SendAppError(c, http.StatusBadRequest, "Status must be APPROVED or REJECTED")
+		return
+	}
+
 	var unlockReq models.UnlockRequest
 	if err := database.DB.First(&unlockReq, id).Error; err != nil {
 		shared.SendAppError(c, http.StatusNotFound, "Unlock request not found")
@@ -118,7 +125,7 @@ func (h *UnlockHandler) ReviewUnlockRequest(c *gin.Context) {
 	}
 
 	now := time.Now()
-	unlockReq.Status = req.Status // APPROVED or REJECTED
+	unlockReq.Status = status
 	unlockReq.ReviewedByID = &adminID
 	unlockReq.ReviewReason = req.ReviewNotes
 	unlockReq.ReviewedAt = &now
@@ -133,7 +140,7 @@ func (h *UnlockHandler) ReviewUnlockRequest(c *gin.Context) {
 	// If Approved, unlock the underlying closed record: DailyClosing for a
 	// CASH_DAY request, or the matching BankClosing row for a BANK_DAY request.
 	dateStr := unlockReq.BusinessDate.Format("2006-01-02")
-	if req.Status == "APPROVED" {
+	if status == "APPROVED" {
 		if unlockReq.EntityType == "BANK_DAY" && unlockReq.BankAccountID != nil {
 			var bankClosing models.BankClosing
 			if err := tx.Where("bank_account_id = ? AND business_date = ?", *unlockReq.BankAccountID, dateStr).First(&bankClosing).Error; err == nil {

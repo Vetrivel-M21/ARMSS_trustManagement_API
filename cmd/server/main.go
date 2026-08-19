@@ -62,8 +62,11 @@ func main() {
 	// 5. Global Middlewares
 	r.Use(gin.Recovery())
 	r.Use(middleware.LoggerMiddleware())
-	r.Use(middleware.CORSMiddleware(cfg.FrontendURL))
-	r.Static("/uploads", "./uploads")
+	r.Use(middleware.CORSMiddleware(cfg.FrontendURL, cfg.CORSAllowedOrigins))
+	// Donor/bank KYC documents (Aadhaar, PAN, QR codes) are sensitive — require
+	// a valid session to fetch them, not just an unguessable filename.
+	uploadsGroup := r.Group("/uploads", middleware.AuthMiddleware(cfg.JWTSecret))
+	uploadsGroup.Static("/", "./uploads")
 
 	// 6. Register API Routes
 	api := r.Group("/api/v1")

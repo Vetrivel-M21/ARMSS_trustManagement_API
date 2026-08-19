@@ -155,6 +155,7 @@ type BankAccount struct {
 	AccountNumberMasked string          `gorm:"size:30;not null" json:"account_number_masked"`
 	IFSCCode            string          `gorm:"size:20;not null" json:"ifsc_code"`
 	Branch              string          `gorm:"size:100;not null" json:"branch"`
+	Location            string          `gorm:"size:150;not null;default:''" json:"location"`
 	OpeningBalance      decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00" json:"opening_balance"`
 	QRCodePath          string          `gorm:"size:255" json:"qr_code_path"`
 	CurrentBalance      decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00" json:"current_balance"`

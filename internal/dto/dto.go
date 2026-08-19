@@ -13,6 +13,7 @@ type CreateBankAccountRequest struct {
 	AccountNumberMasked string          `json:"account_number_masked" binding:"required"`
 	IFSCCode            string          `json:"ifsc_code" binding:"required"`
 	Branch              string          `json:"branch" binding:"required"`
+	Location            string          `json:"location"`
 	OpeningBalance      decimal.Decimal `json:"opening_balance"`
 	QRCodePath          string          `json:"qr_code_path"`
 }
@@ -23,6 +24,7 @@ type UpdateBankAccountRequest struct {
 	AccountNumberMasked string `json:"account_number_masked"`
 	IFSCCode            string `json:"ifsc_code"`
 	Branch              string `json:"branch"`
+	Location            string `json:"location"`
 	QRCodePath          string `json:"qr_code_path"`
 	IsActive            *bool  `json:"is_active"`
 }
@@ -221,15 +223,16 @@ type YoYMonthDonorItem struct {
 }
 
 type BirthdayItem struct {
-	Type          string    `json:"type"` // DONOR / CHILD
-	DonorID       uint      `json:"donor_id"`
-	DonorName     string    `json:"donor_name"`
-	PersonName    string    `json:"person_name"`
-	Phone         string    `json:"phone"`
-	Email         string    `json:"email"`
-	Relationship  string    `json:"relationship"`
-	DateOfBirth   time.Time `json:"date_of_birth"`
-	BirthdayDay   int       `json:"birthday_day"`
-	BirthdayMonth int       `json:"birthday_month"`
-	Age           int       `json:"age"`
+	Type           string    `json:"type"` // DONOR / FAMILY_MEMBER / ANNIVERSARY
+	DonorID        uint      `json:"donor_id"`
+	DonorName      string    `json:"donor_name"`
+	PersonName     string    `json:"person_name"`
+	Phone          string    `json:"phone"`
+	Email          string    `json:"email"`
+	Relationship   string    `json:"relationship"`
+	DateOfBirth    time.Time `json:"date_of_birth"`
+	BirthdayDay    int       `json:"birthday_day"`
+	BirthdayMonth  int       `json:"birthday_month"`
+	Age            int       `json:"age"`
+	FamilyMemberID *uint     `json:"family_member_id,omitempty"`
 }
