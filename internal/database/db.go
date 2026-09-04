@@ -8,7 +8,6 @@ import (
 	"trust-management/backend/internal/models"
 
 	"github.com/rs/zerolog/log"
-	"github.com/shopspring/decimal"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
@@ -92,7 +91,7 @@ func Seed(db *gorm.DB) error {
 		return nil // Already seeded
 	}
 
-	log.Info().Msg("Seeding initial development users and master data...")
+	log.Info().Msg("Seeding initial development users...")
 
 	// Hash password
 	adminHash, _ := bcrypt.GenerateFromPassword([]byte("Admin@123"), bcrypt.DefaultCost)
@@ -121,85 +120,6 @@ func Seed(db *gorm.DB) error {
 	}
 	if err := db.Create(&staffUser).Error; err != nil {
 		return err
-	}
-
-	// Seed Sample Schemes
-	schemes := []models.Scheme{
-		{
-			Name:          "Annadhanam Lunch (Veg)",
-			Category:      "FOOD",
-			FoodType:      "VEG",
-			MealType:      "LUNCH",
-			DefaultAmount: decimal.NewFromFloat(5000.00),
-			Description:   "Full afternoon vegetarian lunch sponsorship for 100 people",
-			IsActive:      true,
-		},
-		{
-			Name:          "Annadhanam Lunch (Non-Veg)",
-			Category:      "FOOD",
-			FoodType:      "NON_VEG",
-			MealType:      "LUNCH",
-			DefaultAmount: decimal.NewFromFloat(7500.00),
-			Description:   "Full afternoon non-vegetarian meal sponsorship",
-			IsActive:      true,
-		},
-		{
-			Name:          "Breakfast Special",
-			Category:      "FOOD",
-			FoodType:      "VEG",
-			MealType:      "BREAKFAST",
-			DefaultAmount: decimal.NewFromFloat(3000.00),
-			Description:   "Morning tiffin and tea distribution",
-			IsActive:      true,
-		},
-		{
-			Name:          "Educational Scholarship Fund",
-			Category:      "EDUCATION",
-			FoodType:      "NA",
-			MealType:      "NA",
-			DefaultAmount: decimal.NewFromFloat(10000.00),
-			Description:   "Financial aid for students in need",
-			IsActive:      true,
-		},
-		{
-			Name:          "Medical Care Relief",
-			Category:      "MEDICAL",
-			FoodType:      "NA",
-			MealType:      "NA",
-			DefaultAmount: decimal.NewFromFloat(5000.00),
-			Description:   "Emergency healthcare support fund",
-			IsActive:      true,
-		},
-	}
-	for _, s := range schemes {
-		db.Create(&s)
-	}
-
-	// Seed Sample Bank Accounts
-	bankAccounts := []models.BankAccount{
-		{
-			BankName:            "State Bank of India (SBI)",
-			AccountName:         "Trust Primary Operating Account",
-			AccountNumberMasked: "**** **** 4892",
-			IFSCCode:            "SBIN0001234",
-			Branch:              "Main Branch",
-			OpeningBalance:      decimal.NewFromFloat(250000.00),
-			CurrentBalance:      decimal.NewFromFloat(250000.00),
-			IsActive:            true,
-		},
-		{
-			BankName:            "HDFC Bank",
-			AccountName:         "Trust Donation Collection Account",
-			AccountNumberMasked: "**** **** 9102",
-			IFSCCode:            "HDFC0005678",
-			Branch:              "Central Market Branch",
-			OpeningBalance:      decimal.NewFromFloat(150000.00),
-			CurrentBalance:      decimal.NewFromFloat(150000.00),
-			IsActive:            true,
-		},
-	}
-	for _, b := range bankAccounts {
-		db.Create(&b)
 	}
 
 	log.Info().Msg("Database seeding completed successfully.")
