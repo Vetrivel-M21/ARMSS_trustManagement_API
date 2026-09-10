@@ -10,10 +10,12 @@ import (
 	"trust-management/backend/internal/closing"
 	"trust-management/backend/internal/config"
 	"trust-management/backend/internal/database"
+	"trust-management/backend/internal/device"
 	"trust-management/backend/internal/donation"
 	"trust-management/backend/internal/donor"
 	"trust-management/backend/internal/expense"
 	"trust-management/backend/internal/expensecategory"
+	"trust-management/backend/internal/installer"
 	"trust-management/backend/internal/middleware"
 	"trust-management/backend/internal/models"
 	"trust-management/backend/internal/report"
@@ -81,17 +83,35 @@ func main() {
 			})
 		})
 
-		// Auth Module
+		// Device Auth — issues the token that gates every route below. Not
+		// itself behind RequireDeviceToken, since this is how a client (the
+		// MIS Desktop app) obtains its first token.
+		deviceHandler := device.NewDeviceHandler(cfg)
+		api.POST("/device/auth", deviceHandler.Authenticate)
+
+		// Installer OTP gate — the ARMSS Gateway Windows installer calls these
+		// before copying any files. Shared-secret protected, not device-token
+		// protected, since this runs before the app (and any device token) exists.
+		installerHandler := installer.NewHandler(cfg)
+		installerRoutes := api.Group("/installer", installerHandler.RequireInstallerSecret)
+		{
+			installerRoutes.POST("/request-otp", installerHandler.RequestOtp)
+			installerRoutes.POST("/verify-otp", installerHandler.VerifyOtp)
+		}
+
+		// Auth Module — requires a device token, since this is a normal
+		// browser's first stop otherwise.
 		authHandler := auth.NewAuthHandler(cfg)
-		authRoutes := api.Group("/auth")
+		authRoutes := api.Group("/auth", middleware.RequireDeviceToken(cfg.DeviceJWTSecret))
 		{
 			authRoutes.POST("/login", authHandler.Login)
 			authRoutes.POST("/logout", authHandler.Logout)
 			authRoutes.GET("/me", middleware.AuthMiddleware(cfg.JWTSecret), authHandler.Me)
 		}
 
-		// Authenticated Routes Group
-		protected := api.Group("", middleware.AuthMiddleware(cfg.JWTSecret))
+		// Authenticated Routes Group — device token first (proves desktop-app
+		// origin), then the existing user JWT check.
+		protected := api.Group("", middleware.RequireDeviceToken(cfg.DeviceJWTSecret), middleware.AuthMiddleware(cfg.JWTSecret))
 		closedDayCheck := middleware.ClosedDayProtectionMiddleware()
 		{
 			// Bank Accounts

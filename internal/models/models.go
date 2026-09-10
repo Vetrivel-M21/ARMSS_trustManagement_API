@@ -101,6 +101,29 @@ type ExpenseCategory struct {
 	UpdatedAt time.Time `gorm:"autoUpdateTime" json:"updated_at"`
 }
 
+// DeviceClient is a pre-registered desktop-app identity (e.g. MIS Desktop's
+// Trust Portal tab), not an end user — it proves a request originated from
+// that app so RequireDeviceToken can gate direct browser access.
+type DeviceClient struct {
+	ID               string     `gorm:"primaryKey;size:36" json:"id"`
+	Name             string     `gorm:"size:100;not null" json:"name"`
+	ClientSecretHash string     `gorm:"size:255;not null" json:"-"`
+	IsActive         bool       `gorm:"default:true;not null" json:"is_active"`
+	CreatedAt        time.Time  `gorm:"autoCreateTime" json:"created_at"`
+	LastUsedAt       *time.Time `json:"last_used_at"`
+}
+
+// InstallerOtpRequest backs the ARMSS Gateway Windows installer's OTP gate —
+// a code is emailed to the configured admin address and the installing user
+// must relay it back before Setup will proceed. Single-use and short-lived.
+type InstallerOtpRequest struct {
+	ID        string    `gorm:"primaryKey;size:36" json:"id"`
+	OtpCode   string    `gorm:"size:6;not null" json:"-"`
+	ExpiresAt time.Time `gorm:"not null" json:"expires_at"`
+	Verified  bool      `gorm:"default:false;not null" json:"verified"`
+	CreatedAt time.Time `gorm:"autoCreateTime" json:"created_at"`
+}
+
 type Donation struct {
 	ID                  uint            `gorm:"primaryKey;autoIncrement" json:"id"`
 	DonationNumber      string          `gorm:"size:30;uniqueIndex;not null" json:"donation_number"`

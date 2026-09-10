@@ -24,7 +24,7 @@ func CORSMiddleware(frontendURL, extraOrigins string) gin.HandlerFunc {
 	config := cors.DefaultConfig()
 	config.AllowOrigins = origins
 	config.AllowMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
-	config.AllowHeaders = []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Requested-With"}
+	config.AllowHeaders = []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Requested-With", "X-Device-Token"}
 	config.AllowCredentials = true
 	config.MaxAge = 12 * time.Hour
 	return cors.New(config)
