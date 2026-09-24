@@ -1,4 +1,4 @@
-package models
+ package models
 
 import (
 	"time"
@@ -101,6 +101,29 @@ type ExpenseCategory struct {
 	UpdatedAt time.Time `gorm:"autoUpdateTime" json:"updated_at"`
 }
 
+// DeviceClient is a pre-registered desktop-app identity (e.g. MIS Desktop's
+// Trust Portal tab), not an end user — it proves a request originated from
+// that app so RequireDeviceToken can gate direct browser access.
+type DeviceClient struct {
+	ID               string     `gorm:"primaryKey;size:36" json:"id"`
+	Name             string     `gorm:"size:100;not null" json:"name"`
+	ClientSecretHash string     `gorm:"size:255;not null" json:"-"`
+	IsActive         bool       `gorm:"default:true;not null" json:"is_active"`
+	CreatedAt        time.Time  `gorm:"autoCreateTime" json:"created_at"`
+	LastUsedAt       *time.Time `json:"last_used_at"`
+}
+
+// InstallerOtpRequest backs the ARMSS Gateway Windows installer's OTP gate —
+// a code is emailed to the configured admin address and the installing user
+// must relay it back before Setup will proceed. Single-use and short-lived.
+type InstallerOtpRequest struct {
+	ID        string    `gorm:"primaryKey;size:36" json:"id"`
+	OtpCode   string    `gorm:"size:6;not null" json:"-"`
+	ExpiresAt time.Time `gorm:"not null" json:"expires_at"`
+	Verified  bool      `gorm:"default:false;not null" json:"verified"`
+	CreatedAt time.Time `gorm:"autoCreateTime" json:"created_at"`
+}
+
 type Donation struct {
 	ID                  uint            `gorm:"primaryKey;autoIncrement" json:"id"`
 	DonationNumber      string          `gorm:"size:30;uniqueIndex;not null" json:"donation_number"`
@@ -121,10 +144,16 @@ type Donation struct {
 	ReferenceNumber     string          `gorm:"size:100" json:"reference_number"`
 	AttachmentPath      string          `gorm:"size:255" json:"attachment_path"`
 	Notes               string          `gorm:"type:text" json:"notes"`
-	Status              string          `gorm:"size:20;not null;default:'ACTIVE'" json:"status"`
-	CreatedByID         uint            `gorm:"not null" json:"created_by"`
-	CreatedBy           *User           `gorm:"foreignKey:CreatedByID" json:"created_by_user,omitempty"`
-	CreatedAt           time.Time       `gorm:"autoCreateTime" json:"created_at"`
+	Status                 string          `gorm:"size:20;not null;default:'ACTIVE'" json:"status"`
+	Source                 string          `gorm:"size:20;not null;default:'WEB'" json:"source"` // WEB / MOBILE_APP
+	PaymentGatewayOrderID  string          `gorm:"size:100;default:''" json:"payment_gateway_order_id"`
+	PaymentGatewayPaymentID string         `gorm:"size:100;default:''" json:"payment_gateway_payment_id"`
+	VerificationStatus     string          `gorm:"size:30;not null;default:'VERIFIED'" json:"verification_status"` // VERIFIED / PENDING / FAILED
+	Category               string          `gorm:"size:50;not null;default:'FOOD'" json:"category"`
+	Reason                 string          `gorm:"type:text" json:"reason"`
+	CreatedByID            uint            `gorm:"not null" json:"created_by"`
+	CreatedBy              *User           `gorm:"foreignKey:CreatedByID" json:"created_by_user,omitempty"`
+	CreatedAt              time.Time       `gorm:"autoCreateTime" json:"created_at"`
 }
 
 type CashTransaction struct {
@@ -158,6 +187,8 @@ type BankAccount struct {
 	Location            string          `gorm:"size:150;not null;default:''" json:"location"`
 	OpeningBalance      decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00" json:"opening_balance"`
 	QRCodePath          string          `gorm:"size:255" json:"qr_code_path"`
+	UPIID               string          `gorm:"size:100;not null;default:''" json:"upi_id"`
+	IsAppDonationAccount bool           `gorm:"default:false;not null" json:"is_app_donation_account"`
 	CurrentBalance      decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00" json:"current_balance"`
 	IsActive            bool            `gorm:"default:true;not null" json:"is_active"`
 	CreatedAt           time.Time       `gorm:"autoCreateTime" json:"created_at"`
@@ -174,6 +205,7 @@ type BankTransaction struct {
 	ReferenceNumber string          `gorm:"size:100;index" json:"reference_number"`
 	SourceType      string          `gorm:"size:30;not null" json:"source_type"`
 	SourceID        uint            `gorm:"not null" json:"source_id"`
+	SourceChannel   string          `gorm:"size:30;default:'STANDARD'" json:"source_channel"` // STANDARD / MOBILE_APP
 	Description     string          `gorm:"type:text" json:"description"`
 	CreatedByID     uint            `gorm:"not null" json:"created_by"`
 	CreatedAt       time.Time       `gorm:"autoCreateTime" json:"created_at"`
@@ -192,9 +224,15 @@ type Expense struct {
 	Description     string          `gorm:"type:text" json:"description"`
 	ReferenceNumber string          `gorm:"size:100" json:"reference_number"`
 	AttachmentPath  string          `gorm:"size:255" json:"attachment_path"`
-	Status          string          `gorm:"size:20;not null;default:'ACTIVE'" json:"status"`
+	Status          string          `gorm:"size:20;not null;default:'PENDING'" json:"status"`
 	CreatedByID     uint            `gorm:"not null" json:"created_by"`
+	CreatedBy       *User           `gorm:"foreignKey:CreatedByID" json:"created_by_user,omitempty"`
+	ApprovedByID    *uint           `gorm:"index" json:"approved_by,omitempty"`
+	ApprovedBy      *User           `gorm:"foreignKey:ApprovedByID" json:"approved_by_user,omitempty"`
+	ApprovedAt      *time.Time      `json:"approved_at,omitempty"`
+	RejectionReason string          `gorm:"size:255" json:"rejection_reason,omitempty"`
 	CreatedAt       time.Time       `gorm:"autoCreateTime" json:"created_at"`
+	Voucher         *Voucher        `gorm:"-" json:"voucher,omitempty"`
 }
 
 type DailyClosing struct {
@@ -226,20 +264,65 @@ type BankClosing struct {
 	Status          BusinessDayStatus `gorm:"type:varchar(20);not null;default:'CLOSED'" json:"status"`
 }
 
+type Ledger struct {
+	ID          uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	LedgerNo    string    `gorm:"size:50;uniqueIndex;not null" json:"ledger_no"`
+	LedgerName  string    `gorm:"size:150;not null" json:"ledger_name"`
+	Description string    `gorm:"type:text" json:"description"`
+	IsActive    bool      `gorm:"default:true;not null" json:"is_active"`
+	CreatedByID uint      `gorm:"not null" json:"created_by_id"`
+	CreatedBy   *User     `gorm:"foreignKey:CreatedByID" json:"created_by,omitempty"`
+	CreatedAt   time.Time `gorm:"autoCreateTime" json:"created_at"`
+	UpdatedAt   time.Time `gorm:"autoUpdateTime" json:"updated_at"`
+	TitlesCount int64     `gorm:"-" json:"titles_count,omitempty"`
+}
+
+type VoucherTitle struct {
+	ID          uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	TitleNo     string    `gorm:"size:50;uniqueIndex;not null" json:"title_no"`
+	Title       string    `gorm:"size:150;not null" json:"title"`
+	VoucherType string    `gorm:"size:30;not null" json:"voucher_type"` // INCOME, EXPENSE, ASSET, LIABILITY, SELF_TRANSFER
+	LedgerID    uint      `gorm:"not null;index" json:"ledger_id"`
+	Ledger      *Ledger   `gorm:"foreignKey:LedgerID" json:"ledger,omitempty"`
+	Description string    `gorm:"type:text" json:"description"`
+	IsActive    bool      `gorm:"default:true;not null" json:"is_active"`
+	CreatedByID uint      `gorm:"not null" json:"created_by_id"`
+	CreatedBy   *User     `gorm:"foreignKey:CreatedByID" json:"created_by,omitempty"`
+	CreatedAt   time.Time `gorm:"autoCreateTime" json:"created_at"`
+	UpdatedAt   time.Time `gorm:"autoUpdateTime" json:"updated_at"`
+}
+
 type Voucher struct {
-	ID               uint            `gorm:"primaryKey;autoIncrement" json:"id"`
-	VoucherNumber    string          `gorm:"size:30;uniqueIndex;not null" json:"voucher_number"`
-	VoucherType      string          `gorm:"size:30;not null" json:"voucher_type"` // DONATION_RECEIPT / EXPENSE_VOUCHER
-	BusinessDate     time.Time       `gorm:"type:date;not null" json:"business_date"`
-	SourceType       string          `gorm:"size:30;not null" json:"source_type"` // DONATION / EXPENSE
-	SourceID         uint            `gorm:"not null" json:"source_id"`
-	PayeeOrDonorName string          `gorm:"size:150;not null" json:"payee_or_donor_name"`
-	Amount           decimal.Decimal `gorm:"type:decimal(15,2);not null" json:"amount"`
-	AmountInWords    string          `gorm:"type:text;not null" json:"amount_in_words"`
-	PaymentMode      PaymentMode     `gorm:"type:enum('CASH','BANK');not null" json:"payment_mode"`
-	Status           string          `gorm:"size:20;not null;default:'ISSUED'" json:"status"`
-	CreatedByID      uint            `gorm:"not null" json:"created_by"`
-	CreatedAt        time.Time       `gorm:"autoCreateTime" json:"created_at"`
+	ID                  uint            `gorm:"primaryKey;autoIncrement" json:"id"`
+	VoucherNumber       string          `gorm:"size:30;uniqueIndex;not null" json:"voucher_number"`
+	VoucherType         string          `gorm:"size:30;not null" json:"voucher_type"` // INCOME, EXPENSE, ASSET, LIABILITY, SELF_TRANSFER, DONATION_RECEIPT, EXPENSE_VOUCHER
+	LedgerID            *uint           `gorm:"index" json:"ledger_id,omitempty"`
+	Ledger              *Ledger         `gorm:"foreignKey:LedgerID" json:"ledger,omitempty"`
+	TitleID             *uint           `gorm:"index" json:"title_id,omitempty"`
+	Title               *VoucherTitle   `gorm:"foreignKey:TitleID" json:"title,omitempty"`
+	BusinessDate        time.Time       `gorm:"type:date;not null" json:"business_date"`
+	SourceType          string          `gorm:"size:30;not null;default:'DIRECT'" json:"source_type"` // DIRECT, DONATION, EXPENSE
+	SourceID            uint            `gorm:"not null;default:0" json:"source_id"`
+	PayeeOrDonorName    string          `gorm:"size:150;not null;default:''" json:"payee_or_donor_name"`
+	Amount              decimal.Decimal `gorm:"type:decimal(15,2);not null" json:"amount"`
+	AmountInWords       string          `gorm:"type:text;not null" json:"amount_in_words"`
+	PaymentMode         PaymentMode     `gorm:"type:enum('CASH','BANK');not null" json:"payment_mode"`
+	BankAccountID       *uint           `gorm:"index" json:"bank_account_id,omitempty"`
+	BankAccount         *BankAccount    `gorm:"foreignKey:BankAccountID" json:"bank_account,omitempty"`
+	FromBankAccountID   *uint           `gorm:"index" json:"from_bank_account_id,omitempty"`
+	FromBankAccount     *BankAccount    `gorm:"foreignKey:FromBankAccountID" json:"from_bank_account,omitempty"`
+	ToBankAccountID     *uint           `gorm:"index" json:"to_bank_account_id,omitempty"`
+	ToBankAccount       *BankAccount    `gorm:"foreignKey:ToBankAccountID" json:"to_bank_account,omitempty"`
+	Details             string          `gorm:"type:text" json:"details"`
+	AttachmentPath      string          `gorm:"size:255;default:''" json:"attachment_path"`
+	Status              string          `gorm:"size:20;not null;default:'ISSUED'" json:"status"` // ISSUED, PENDING, APPROVED, REJECTED, CANCELLED
+	CreatedByID         uint            `gorm:"not null" json:"created_by"`
+	CreatedBy           *User           `gorm:"foreignKey:CreatedByID" json:"created_by_user,omitempty"`
+	ApprovedByID        *uint           `gorm:"index" json:"approved_by,omitempty"`
+	ApprovedBy          *User           `gorm:"foreignKey:ApprovedByID" json:"approved_by_user,omitempty"`
+	ApprovedAt          *time.Time      `json:"approved_at,omitempty"`
+	RejectionReason     string          `gorm:"size:255;default:''" json:"rejection_reason,omitempty"`
+	CreatedAt           time.Time       `gorm:"autoCreateTime" json:"created_at"`
 }
 
 type UnlockRequest struct {

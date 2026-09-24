@@ -8,25 +8,34 @@ import (
 
 // --- Bank Account DTOs ---
 type CreateBankAccountRequest struct {
-	BankName            string          `json:"bank_name" binding:"required"`
-	AccountName         string          `json:"account_name" binding:"required"`
-	AccountNumberMasked string          `json:"account_number_masked" binding:"required"`
-	IFSCCode            string          `json:"ifsc_code" binding:"required"`
-	Branch              string          `json:"branch" binding:"required"`
-	Location            string          `json:"location"`
-	OpeningBalance      decimal.Decimal `json:"opening_balance"`
-	QRCodePath          string          `json:"qr_code_path"`
+	BankName             string          `json:"bank_name" binding:"required"`
+	AccountName          string          `json:"account_name" binding:"required"`
+	AccountNumberMasked  string          `json:"account_number_masked" binding:"required"`
+	IFSCCode             string          `json:"ifsc_code" binding:"required"`
+	Branch               string          `json:"branch" binding:"required"`
+	Location             string          `json:"location"`
+	OpeningBalance       decimal.Decimal `json:"opening_balance"`
+	QRCodePath           string          `json:"qr_code_path"`
+	UPIID                string          `json:"upi_id"`
+	IsAppDonationAccount *bool           `json:"is_app_donation_account"`
 }
 
 type UpdateBankAccountRequest struct {
-	BankName            string `json:"bank_name"`
-	AccountName         string `json:"account_name"`
-	AccountNumberMasked string `json:"account_number_masked"`
-	IFSCCode            string `json:"ifsc_code"`
-	Branch              string `json:"branch"`
-	Location            string `json:"location"`
-	QRCodePath          string `json:"qr_code_path"`
-	IsActive            *bool  `json:"is_active"`
+	BankName             string `json:"bank_name"`
+	AccountName          string `json:"account_name"`
+	AccountNumberMasked  string `json:"account_number_masked"`
+	IFSCCode             string `json:"ifsc_code"`
+	Branch               string `json:"branch"`
+	Location             string `json:"location"`
+	QRCodePath           string `json:"qr_code_path"`
+	UPIID                string `json:"upi_id"`
+	IsAppDonationAccount *bool  `json:"is_app_donation_account"`
+	IsActive             *bool  `json:"is_active"`
+}
+
+type SetAppDonationBankRequest struct {
+	BankAccountID uint   `json:"bank_account_id" binding:"required"`
+	UPIID         string `json:"upi_id"`
 }
 
 // Amount validation for decimal.Decimal fields (Amount > 0) is performed manually
@@ -147,22 +156,92 @@ type DenominationItem struct {
 
 // --- Donation DTOs ---
 type CreateDonationRequest struct {
-	DonorID             uint               `json:"donor_id" binding:"required"`
-	BusinessDate        string             `json:"business_date"` // YYYY-MM-DD
-	Amount              decimal.Decimal    `json:"amount"`
-	PaymentMode         string             `json:"payment_mode" binding:"required"` // CASH / BANK
-	Purpose             string             `json:"purpose" binding:"required"`
-	SchemeID            *uint              `json:"scheme_id"`
-	EventType           string             `json:"event_type"` // BIRTHDAY, ANNIVERSARY, CHILD_BIRTHDAY, MEMORIAL, OTHER
-	EventPersonName     string             `json:"event_person_name"`
-	EventDate           string             `json:"event_date"` // YYYY-MM-DD
-	RelationshipToDonor string             `json:"relationship_to_donor"`
-	FamilyMemberID      *uint              `json:"family_member_id"`
-	BankAccountID       *uint              `json:"bank_account_id"`  // Required if PaymentMode == "BANK"
-	ReferenceNumber     string             `json:"reference_number"` // Optional, BANK mode only
-	AttachmentPath      string             `json:"attachment_path"`  // Optional, BANK mode only
-	Notes               string             `json:"notes"`
-	Denominations       []DenominationItem `json:"denominations"` // Optional for CASH mode verification
+	DonorID                 uint               `json:"donor_id" binding:"required"`
+	BusinessDate            string             `json:"business_date"` // YYYY-MM-DD
+	Amount                  decimal.Decimal    `json:"amount"`
+	PaymentMode             string             `json:"payment_mode" binding:"required"` // CASH / BANK
+	Purpose                 string             `json:"purpose" binding:"required"`
+	Category                string             `json:"category"` // FOOD, MEDICINE, EDUCATION, GENERAL, OTHER
+	Reason                  string             `json:"reason"`
+	Source                  string             `json:"source"`   // WEB / MOBILE_APP
+	SchemeID                *uint              `json:"scheme_id"`
+	EventType               string             `json:"event_type"` // BIRTHDAY, ANNIVERSARY, CHILD_BIRTHDAY, MEMORIAL, OTHER
+	EventPersonName         string             `json:"event_person_name"`
+	EventDate               string             `json:"event_date"` // YYYY-MM-DD
+	RelationshipToDonor     string             `json:"relationship_to_donor"`
+	FamilyMemberID          *uint              `json:"family_member_id"`
+	BankAccountID           *uint              `json:"bank_account_id"`  // Required if PaymentMode == "BANK"
+	ReferenceNumber         string             `json:"reference_number"` // Optional, BANK mode only
+	AttachmentPath          string             `json:"attachment_path"`  // Optional, BANK mode only
+	PaymentGatewayOrderID   string             `json:"payment_gateway_order_id"`
+	PaymentGatewayPaymentID string             `json:"payment_gateway_payment_id"`
+	Notes                   string             `json:"notes"`
+	Denominations           []DenominationItem `json:"denominations"` // Optional for CASH mode verification
+}
+
+// --- Public Donor App DTOs ---
+type PublicAppDonationConfig struct {
+	BankAccountID       uint   `json:"bank_account_id"`
+	BankName            string `json:"bank_name"`
+	AccountName         string `json:"account_name"`
+	AccountNumberMasked string `json:"account_number_masked"`
+	IFSCCode            string `json:"ifsc_code"`
+	Branch              string `json:"branch"`
+	UPIID               string `json:"upi_id"`
+	QRCodePath          string `json:"qr_code_path"`
+	TrustName           string `json:"trust_name"`
+	RazorpayKeyID       string `json:"razorpay_key_id,omitempty"`
+}
+
+type CreateRazorpayOrderRequest struct {
+	Amount    string `json:"amount" binding:"required"`
+	DonorName string `json:"donor_name"`
+	Phone     string `json:"phone"`
+}
+
+type RazorpayOrderResponse struct {
+	RazorpayOrderID string `json:"razorpay_order_id"`
+	Amount          int64  `json:"amount"` // in paise
+	Currency        string `json:"currency"`
+	KeyID           string `json:"key_id"`
+}
+
+type PublicCreateDonationRequest struct {
+	FullName                string          `json:"full_name" binding:"required"`
+	Phone                   string          `json:"phone" binding:"required"`
+	Email                   string          `json:"email"`
+	PANNumber               string          `json:"pan_number"`
+	AddressLine             string          `json:"address_line"`
+	City                    string          `json:"city"`
+	State                   string          `json:"state"`
+	Pincode                 string          `json:"pincode"`
+	Category                string          `json:"category" binding:"required"` // FOOD, MEDICINE, EDUCATION, GENERAL, OTHER
+	SchemeID                *uint           `json:"scheme_id"`
+	Amount                  decimal.Decimal `json:"amount" binding:"required"`
+	Reason                  string          `json:"reason"`
+	EventType               string          `json:"event_type"`
+	EventPersonName         string          `json:"event_person_name"`
+	EventDate               string          `json:"event_date"`
+	RelationshipToDonor     string          `json:"relationship_to_donor"`
+	PaymentGatewayOrderID   string          `json:"payment_gateway_order_id"`
+	PaymentGatewayPaymentID string          `json:"payment_gateway_payment_id"`
+	PaymentSignature        string          `json:"payment_signature"`
+	UPIReferenceNumber      string          `json:"upi_reference_number"`
+}
+
+type PublicDonationItem struct {
+	ID                      uint            `json:"id"`
+	DonationNumber          string          `json:"donation_number"`
+	BusinessDate            string          `json:"business_date"`
+	Amount                  decimal.Decimal `json:"amount"`
+	Category                string          `json:"category"`
+	Purpose                 string          `json:"purpose"`
+	Reason                  string          `json:"reason"`
+	SchemeName              string          `json:"scheme_name,omitempty"`
+	VerificationStatus      string          `json:"verification_status"`
+	PaymentGatewayPaymentID string          `json:"payment_gateway_payment_id"`
+	UPIReferenceNumber      string          `json:"upi_reference_number"`
+	CreatedAt               time.Time       `json:"created_at"`
 }
 
 // --- Expense DTOs ---
@@ -176,6 +255,10 @@ type CreateExpenseRequest struct {
 	Description     string          `json:"description"`
 	ReferenceNumber string          `json:"reference_number"`
 	AttachmentPath  string          `json:"attachment_path"`
+}
+
+type RejectExpenseRequest struct {
+	Reason string `json:"reason" binding:"required"`
 }
 
 // --- Cash Denomination Grid DTO ---

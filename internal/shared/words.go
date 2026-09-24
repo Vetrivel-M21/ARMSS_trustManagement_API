@@ -54,3 +54,8 @@ func ConvertAmountToWords(amount decimal.Decimal) string {
 
 	return result
 }
+
+// AmountToWords is an alias for ConvertAmountToWords.
+func AmountToWords(amount decimal.Decimal) string {
+	return ConvertAmountToWords(amount)
+}

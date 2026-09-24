@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"trust-management/backend/internal/config"
 	"trust-management/backend/internal/database"
 	"trust-management/backend/internal/dto"
 	"trust-management/backend/internal/models"
@@ -19,10 +21,16 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-type BankHandler struct{}
+type BankHandler struct {
+	cfg *config.Config
+}
 
-func NewBankHandler() *BankHandler {
-	return &BankHandler{}
+func NewBankHandler(cfg ...*config.Config) *BankHandler {
+	var c *config.Config
+	if len(cfg) > 0 {
+		c = cfg[0]
+	}
+	return &BankHandler{cfg: c}
 }
 
 // GetBankAccounts returns list of bank accounts
@@ -65,11 +73,18 @@ func (h *BankHandler) CreateBankAccount(c *gin.Context) {
 		Location:            req.Location,
 		OpeningBalance:      req.OpeningBalance,
 		QRCodePath:          req.QRCodePath,
+		UPIID:               req.UPIID,
 		CurrentBalance:      req.OpeningBalance, // Initialized to opening balance
 		IsActive:            true,
 	}
+	if req.IsAppDonationAccount != nil {
+		account.IsAppDonationAccount = *req.IsAppDonationAccount
+	}
 
 	tx := database.DB.Begin()
+	if account.IsAppDonationAccount {
+		_ = tx.Model(&models.BankAccount{}).Where("1 = 1").Update("is_app_donation_account", false)
+	}
 	if err := tx.Create(&account).Error; err != nil {
 		tx.Rollback()
 		shared.SendAppError(c, http.StatusInternalServerError, "Failed to create bank account: "+err.Error())
@@ -139,6 +154,9 @@ func (h *BankHandler) UpdateBankAccount(c *gin.Context) {
 	if req.QRCodePath != "" {
 		account.QRCodePath = req.QRCodePath
 	}
+	if req.UPIID != "" {
+		account.UPIID = req.UPIID
+	}
 	if req.IsActive != nil {
 		account.IsActive = *req.IsActive
 	}
@@ -147,6 +165,13 @@ func (h *BankHandler) UpdateBankAccount(c *gin.Context) {
 	userID, _ := userIDVal.(uint)
 
 	tx := database.DB.Begin()
+	if req.IsAppDonationAccount != nil {
+		account.IsAppDonationAccount = *req.IsAppDonationAccount
+		if *req.IsAppDonationAccount {
+			_ = tx.Model(&models.BankAccount{}).Where("id != ?", account.ID).Update("is_app_donation_account", false)
+		}
+	}
+
 	if err := tx.Save(&account).Error; err != nil {
 		tx.Rollback()
 		shared.SendAppError(c, http.StatusInternalServerError, "Failed to update bank account")
@@ -173,11 +198,103 @@ func (h *BankHandler) UpdateBankAccount(c *gin.Context) {
 	shared.SendSuccess(c, http.StatusOK, account)
 }
 
+// SetAppDonationAccount sets the specified bank account as the active mobile app donation account
+func (h *BankHandler) SetAppDonationAccount(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		shared.SendAppError(c, http.StatusBadRequest, "Invalid bank account ID")
+		return
+	}
+
+	var account models.BankAccount
+	if err := database.DB.First(&account, id).Error; err != nil {
+		shared.SendAppError(c, http.StatusNotFound, "Bank account not found")
+		return
+	}
+
+	var req dto.SetAppDonationBankRequest
+	_ = c.ShouldBindJSON(&req)
+
+	userIDVal, _ := c.Get("userID")
+	userID, _ := userIDVal.(uint)
+
+	tx := database.DB.Begin()
+	// Clear any other active app donation bank account
+	if err := tx.Model(&models.BankAccount{}).Where("id != ?", id).Update("is_app_donation_account", false).Error; err != nil {
+		tx.Rollback()
+		shared.SendAppError(c, http.StatusInternalServerError, "Failed to update other bank accounts")
+		return
+	}
+
+	account.IsAppDonationAccount = true
+	if req.UPIID != "" {
+		account.UPIID = req.UPIID
+	}
+
+	if err := tx.Save(&account).Error; err != nil {
+		tx.Rollback()
+		shared.SendAppError(c, http.StatusInternalServerError, "Failed to set app donation account")
+		return
+	}
+
+	audit := models.AuditLog{
+		UserID:     &userID,
+		Action:     "SET_APP_DONATION_ACCOUNT",
+		EntityName: "BankAccount",
+		EntityID:   account.ID,
+		AfterData:  shared.JSONOrNull(account),
+		IPAddress:  c.ClientIP(),
+	}
+	_ = tx.Create(&audit)
+	tx.Commit()
+
+	shared.SendSuccess(c, http.StatusOK, account)
+}
+
+// GetAppDonationConfig is a public endpoint returning the active app donation bank account & UPI ID
+func (h *BankHandler) GetAppDonationConfig(c *gin.Context) {
+	var account models.BankAccount
+	if err := database.DB.Where("is_app_donation_account = ? AND is_active = ?", true, true).First(&account).Error; err != nil {
+		// Fallback to first active account if none explicitly designated
+		if err := database.DB.Where("is_active = ?", true).Order("id asc").First(&account).Error; err != nil {
+			shared.SendAppError(c, http.StatusNotFound, "No active bank account configured for donations")
+			return
+		}
+	}
+
+	keyID := ""
+	if h.cfg != nil {
+		keyID = h.cfg.RazorpayKeyID
+	}
+	if keyID == "" {
+		keyID = strings.TrimSpace(os.Getenv("razerpay_apikey"))
+		if keyID == "" {
+			keyID = strings.TrimSpace(os.Getenv("RAZORPAY_KEY_ID"))
+		}
+	}
+
+	config := dto.PublicAppDonationConfig{
+		BankAccountID:       account.ID,
+		BankName:            account.BankName,
+		AccountName:         account.AccountName,
+		AccountNumberMasked: account.AccountNumberMasked,
+		IFSCCode:            account.IFSCCode,
+		Branch:              account.Branch,
+		UPIID:               account.UPIID,
+		QRCodePath:          account.QRCodePath,
+		TrustName:           account.AccountName,
+		RazorpayKeyID:       keyID,
+	}
+	shared.SendSuccess(c, http.StatusOK, config)
+}
+
 // BankTransactionDetail is one ledger row enriched with who/why details from
 // its source Donation or Expense — the ledger alone only carries a generic
 // category, not who gave/paid or why.
 type BankTransactionDetail struct {
 	models.BankTransaction
+	IsMobileApp    bool   `json:"is_mobile_app"`
 	DonorName      string `json:"donor_name,omitempty"`
 	DonorPhone     string `json:"donor_phone,omitempty"`
 	DonationNumber string `json:"donation_number,omitempty"`
@@ -238,9 +355,15 @@ func (h *BankHandler) GetBankTransactions(c *gin.Context) {
 	result := make([]BankTransactionDetail, 0, len(txs))
 	for _, t := range txs {
 		row := BankTransactionDetail{BankTransaction: t}
+		if t.SourceChannel == "MOBILE_APP" {
+			row.IsMobileApp = true
+		}
 		switch t.SourceType {
 		case "DONATION":
 			if d, ok := donationByID[t.SourceID]; ok {
+				if d.Source == "MOBILE_APP" {
+					row.IsMobileApp = true
+				}
 				row.DonationNumber = d.DonationNumber
 				row.Purpose = d.Purpose
 				row.AttachmentPath = d.AttachmentPath
@@ -317,6 +440,8 @@ type bankCreditRawRow struct {
 	FoodType        string
 	MealType        string
 	Category        string
+	LedgerName      string
+	TitleName       string
 	Purpose         string
 	ReferenceNumber string
 	DonorName       string
@@ -329,6 +454,8 @@ type bankDebitRawRow struct {
 	SourceType    string
 	TxReference   string
 	Category      string
+	LedgerName    string
+	TitleName     string
 	PayeeName     string
 	Description   string
 	ExpenseRef    string
@@ -370,10 +497,15 @@ func (h *BankHandler) GetBankDaySummary(c *gin.Context) {
 			COALESCE(schemes.food_type, '') as food_type,
 			COALESCE(schemes.meal_type, '') as meal_type,
 			COALESCE(schemes.category, '') as category,
-			COALESCE(donations.purpose, '') as purpose,
-			COALESCE(donations.reference_number, '') as reference_number,
-			COALESCE(donors.full_name, '') as donor_name`).
+			COALESCE(ledgers.ledger_name, '') as ledger_name,
+			COALESCE(voucher_titles.title, '') as title_name,
+			COALESCE(donations.purpose, vouchers.details, bank_transactions.description, '') as purpose,
+			COALESCE(donations.reference_number, vouchers.voucher_number, bank_transactions.reference_number, '') as reference_number,
+			COALESCE(donors.full_name, vouchers.payee_or_donor_name, '') as donor_name`).
 		Joins("LEFT JOIN donations ON bank_transactions.source_type = 'DONATION' AND bank_transactions.source_id = donations.id").
+		Joins("LEFT JOIN vouchers ON bank_transactions.source_type = 'VOUCHER' AND bank_transactions.source_id = vouchers.id").
+		Joins("LEFT JOIN ledgers ON vouchers.ledger_id = ledgers.id").
+		Joins("LEFT JOIN voucher_titles ON vouchers.title_id = voucher_titles.id").
 		Joins("LEFT JOIN schemes ON schemes.id = donations.scheme_id").
 		Joins("LEFT JOIN donors ON donors.id = donations.donor_id").
 		Where("bank_transactions.transaction_type = ? AND bank_transactions.business_date = ?", "CREDIT", dateStr).
@@ -387,10 +519,15 @@ func (h *BankHandler) GetBankDaySummary(c *gin.Context) {
 			bank_transactions.source_type as source_type,
 			bank_transactions.reference_number as tx_reference,
 			bank_transactions.category as category,
-			COALESCE(expenses.payee_name, '') as payee_name,
-			COALESCE(expenses.description, '') as description,
-			COALESCE(expenses.reference_number, '') as expense_ref`).
+			COALESCE(ledgers.ledger_name, expenses.category, '') as ledger_name,
+			COALESCE(voucher_titles.title, '') as title_name,
+			COALESCE(expenses.payee_name, vouchers.payee_or_donor_name, '') as payee_name,
+			COALESCE(vouchers.details, expenses.description, bank_transactions.description, '') as description,
+			COALESCE(vouchers.voucher_number, expenses.reference_number, bank_transactions.reference_number, '') as expense_ref`).
 		Joins("LEFT JOIN expenses ON bank_transactions.source_type = 'EXPENSE' AND bank_transactions.source_id = expenses.id").
+		Joins("LEFT JOIN vouchers ON bank_transactions.source_type = 'VOUCHER' AND bank_transactions.source_id = vouchers.id").
+		Joins("LEFT JOIN ledgers ON vouchers.ledger_id = ledgers.id").
+		Joins("LEFT JOIN voucher_titles ON vouchers.title_id = voucher_titles.id").
 		Where("bank_transactions.transaction_type = ? AND bank_transactions.business_date = ?", "DEBIT", dateStr).
 		Scan(&debitRaw)
 
@@ -400,12 +537,10 @@ func (h *BankHandler) GetBankDaySummary(c *gin.Context) {
 	creditGroups := make(map[breakdownGroupKey]*BankBreakdownRow)
 	var creditOrder []breakdownGroupKey
 	for _, r := range creditRaw {
-		// The donor's own purpose text takes priority over the scheme name —
-		// schemes now get auto-generated names (e.g. "Veg Breakfast") that are
-		// less meaningful here than what the donor actually typed. Mirrors the
-		// cash-side aggregation in internal/cash/cash.go.
 		label := r.Purpose
-		if label == "" {
+		if r.SourceType == "VOUCHER" && r.LedgerName != "" {
+			label = r.LedgerName
+		} else if label == "" {
 			if r.SchemeName != "" {
 				label = r.SchemeName
 			} else if r.SourceType == "INTER_BANK_TRANSFER" {
@@ -433,7 +568,13 @@ func (h *BankHandler) GetBankDaySummary(c *gin.Context) {
 			name = "—"
 		}
 		purpose := r.Purpose
-		if purpose == "" {
+		if r.TitleName != "" {
+			if purpose != "" && purpose != r.TitleName {
+				purpose = fmt.Sprintf("[%s] %s", r.TitleName, purpose)
+			} else {
+				purpose = r.TitleName
+			}
+		} else if purpose == "" {
 			purpose = label
 		}
 		grp.Entries = append(grp.Entries, BankBreakdownEntry{Name: name, Purpose: purpose, ReferenceNumber: refNum, Amount: r.Amount, BusinessDate: r.BusinessDate.Format("2006-01-02")})
@@ -444,7 +585,16 @@ func (h *BankHandler) GetBankDaySummary(c *gin.Context) {
 	debitGroups := make(map[breakdownGroupKey]*BankBreakdownRow)
 	var debitOrder []breakdownGroupKey
 	for _, r := range debitRaw {
-		label := r.Category
+		label := r.LedgerName
+		if label == "" {
+			if r.SourceType == "INTER_BANK_TRANSFER" {
+				label = "Inter-Bank Transfer"
+			} else if r.Category != "" && r.Category != "EXPENSE" {
+				label = r.Category
+			} else {
+				label = "General Expense"
+			}
+		}
 		key := breakdownGroupKey{label: label}
 		grp, ok := debitGroups[key]
 		if !ok {
@@ -468,7 +618,13 @@ func (h *BankHandler) GetBankDaySummary(c *gin.Context) {
 			}
 		}
 		purpose := r.Description
-		if purpose == "" {
+		if r.TitleName != "" {
+			if purpose != "" && purpose != r.TitleName {
+				purpose = fmt.Sprintf("[%s] %s", r.TitleName, purpose)
+			} else {
+				purpose = r.TitleName
+			}
+		} else if purpose == "" {
 			purpose = label
 		}
 		grp.Entries = append(grp.Entries, BankBreakdownEntry{Name: name, Purpose: purpose, ReferenceNumber: refNum, Amount: r.Amount, BusinessDate: r.BusinessDate.Format("2006-01-02")})

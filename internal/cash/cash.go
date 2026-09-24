@@ -1,6 +1,7 @@
 package cash
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
@@ -112,14 +113,42 @@ func (h *CashHandler) GetDailyCashSummary(c *gin.Context) {
 		}
 	}
 
+	// In addition to legacy cash donations, include approved cash vouchers (INCOME, LIABILITY)
+	var cashIncomeVouchers []models.Voucher
+	database.DB.Preload("Ledger").Preload("Title").
+		Where("business_date = ? AND payment_mode = ? AND status IN ('APPROVED', 'ISSUED') AND voucher_type IN ('INCOME', 'LIABILITY')", dateStr, "CASH").
+		Find(&cashIncomeVouchers)
+
+	for _, v := range cashIncomeVouchers {
+		label := "General Cash Income"
+		if v.Title != nil && v.Title.Title != "" {
+			label = v.Title.Title
+		} else if v.Ledger != nil && v.Ledger.LedgerName != "" {
+			label = v.Ledger.LedgerName
+		}
+		key := label + "|NA|NA"
+		if grp, ok := groupMap[key]; ok {
+			grp.Count++
+			grp.TotalAmount = grp.TotalAmount.Add(v.Amount)
+		} else {
+			groupMap[key] = &AggregatedCashGroup{
+				Label:       label,
+				FoodType:    "NA",
+				MealType:    "NA",
+				Count:       1,
+				TotalAmount: v.Amount,
+				Donations:   []models.Donation{},
+			}
+		}
+	}
+
 	var aggregatedGroups []AggregatedCashGroup
 	for _, grp := range groupMap {
 		aggregatedGroups = append(aggregatedGroups, *grp)
 	}
 
 	// Aggregated Cash Outflow (expenses paid in cash) by Category — the debit-side
-	// counterpart of the donation breakdown above, so cash outflow isn't just a
-	// single total with no detail behind it.
+	// counterpart of the donation breakdown above, including approved cash vouchers.
 	type AggregatedExpenseGroup struct {
 		Category    string           `json:"category"`
 		Count       int64            `json:"count"`
@@ -142,6 +171,54 @@ func (h *CashHandler) GetDailyCashSummary(c *gin.Context) {
 				Count:       1,
 				TotalAmount: exp.Amount,
 				Expenses:    []models.Expense{exp},
+			}
+		}
+	}
+
+	// Also aggregate approved cash vouchers (EXPENSE and ASSET)
+	var cashVouchers []models.Voucher
+	database.DB.Preload("Ledger").Preload("Title").
+		Where("business_date = ? AND payment_mode = ? AND status IN ('APPROVED', 'ISSUED') AND voucher_type IN ('EXPENSE', 'ASSET')", dateStr, "CASH").
+		Find(&cashVouchers)
+
+	for _, v := range cashVouchers {
+		cat := "General Expense"
+		if v.Ledger != nil && v.Ledger.LedgerName != "" {
+			cat = v.Ledger.LedgerName
+		} else if v.Title != nil && v.Title.Title != "" {
+			cat = v.Title.Title
+		} else if v.VoucherType != "" {
+			cat = v.VoucherType
+		}
+
+		desc := v.Details
+		if v.Title != nil && v.Title.Title != "" {
+			if desc != "" && desc != v.Title.Title {
+				desc = fmt.Sprintf("[%s] %s", v.Title.Title, desc)
+			} else {
+				desc = v.Title.Title
+			}
+		}
+
+		vExp := models.Expense{
+			ExpenseNumber: v.VoucherNumber,
+			PayeeName:     v.PayeeOrDonorName,
+			Description:   desc,
+			Amount:        v.Amount,
+			PaymentMode:   models.PaymentModeCash,
+			Category:      cat,
+			Status:        v.Status,
+		}
+		if grp, ok := expenseGroupMap[cat]; ok {
+			grp.Count++
+			grp.TotalAmount = grp.TotalAmount.Add(v.Amount)
+			grp.Expenses = append(grp.Expenses, vExp)
+		} else {
+			expenseGroupMap[cat] = &AggregatedExpenseGroup{
+				Category:    cat,
+				Count:       1,
+				TotalAmount: v.Amount,
+				Expenses:    []models.Expense{vExp},
 			}
 		}
 	}

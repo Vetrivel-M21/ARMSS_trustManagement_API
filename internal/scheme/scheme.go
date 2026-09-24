@@ -232,3 +232,13 @@ func (h *SchemeHandler) UpdateScheme(c *gin.Context) {
 
 	shared.SendSuccess(c, http.StatusOK, scheme)
 }
+
+// GetPublicActiveSchemes returns active schemes for the mobile donor application
+func (h *SchemeHandler) GetPublicActiveSchemes(c *gin.Context) {
+	var schemes []models.Scheme
+	if err := database.DB.Where("is_active = ?", true).Order("category asc, name asc").Find(&schemes).Error; err != nil {
+		shared.SendAppError(c, http.StatusInternalServerError, "Failed to fetch active schemes")
+		return
+	}
+	shared.SendSuccess(c, http.StatusOK, schemes)
+}

@@ -135,25 +135,40 @@ func (h *DonationHandler) CreateDonation(c *gin.Context) {
 		}
 	}
 
+	category := req.Category
+	if category == "" {
+		category = "FOOD"
+	}
+	source := req.Source
+	if source == "" {
+		source = "WEB"
+	}
+
 	donation := models.Donation{
-		DonationNumber:      donationNumber,
-		DonorID:             req.DonorID,
-		BusinessDate:        bizDate,
-		Amount:              req.Amount,
-		PaymentMode:         paymentMode,
-		Purpose:             req.Purpose,
-		SchemeID:            req.SchemeID,
-		EventType:           req.EventType,
-		EventPersonName:     req.EventPersonName,
-		EventDate:           eventDate,
-		RelationshipToDonor: req.RelationshipToDonor,
-		FamilyMemberID:      req.FamilyMemberID,
-		BankAccountID:       req.BankAccountID,
-		ReferenceNumber:     req.ReferenceNumber,
-		AttachmentPath:      req.AttachmentPath,
-		Notes:               req.Notes,
-		Status:              "ACTIVE",
-		CreatedByID:         userID,
+		DonationNumber:          donationNumber,
+		DonorID:                 req.DonorID,
+		BusinessDate:            bizDate,
+		Amount:                  req.Amount,
+		PaymentMode:             paymentMode,
+		Purpose:                 req.Purpose,
+		Category:                category,
+		Reason:                  req.Reason,
+		Source:                  source,
+		PaymentGatewayOrderID:   req.PaymentGatewayOrderID,
+		PaymentGatewayPaymentID: req.PaymentGatewayPaymentID,
+		VerificationStatus:      "VERIFIED",
+		SchemeID:                req.SchemeID,
+		EventType:               req.EventType,
+		EventPersonName:         req.EventPersonName,
+		EventDate:               eventDate,
+		RelationshipToDonor:     req.RelationshipToDonor,
+		FamilyMemberID:          req.FamilyMemberID,
+		BankAccountID:           req.BankAccountID,
+		ReferenceNumber:         req.ReferenceNumber,
+		AttachmentPath:          req.AttachmentPath,
+		Notes:                   req.Notes,
+		Status:                  "ACTIVE",
+		CreatedByID:             userID,
 	}
 
 	if err := tx.Create(&donation).Error; err != nil {
@@ -199,6 +214,10 @@ func (h *DonationHandler) CreateDonation(c *gin.Context) {
 		}
 	} else if paymentMode == models.PaymentModeBank {
 		// Create Bank Credit transaction
+		sourceChannel := "STANDARD"
+		if source == "MOBILE_APP" {
+			sourceChannel = "MOBILE_APP"
+		}
 		bankTx := models.BankTransaction{
 			BankAccountID:   *req.BankAccountID,
 			BusinessDate:    bizDate,
@@ -208,6 +227,7 @@ func (h *DonationHandler) CreateDonation(c *gin.Context) {
 			ReferenceNumber: donation.DonationNumber,
 			SourceType:      "DONATION",
 			SourceID:        donation.ID,
+			SourceChannel:   sourceChannel,
 			Description:     fmt.Sprintf("Bank Donation %s (%s)", donation.DonationNumber, req.Purpose),
 			CreatedByID:     userID,
 		}

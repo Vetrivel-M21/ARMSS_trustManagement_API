@@ -10,10 +10,11 @@ import (
 	"trust-management/backend/internal/closing"
 	"trust-management/backend/internal/config"
 	"trust-management/backend/internal/database"
-	"trust-management/backend/internal/donation"
 	"trust-management/backend/internal/donor"
+	"trust-management/backend/internal/donation"
 	"trust-management/backend/internal/expense"
 	"trust-management/backend/internal/expensecategory"
+	"trust-management/backend/internal/ledger"
 	"trust-management/backend/internal/middleware"
 	"trust-management/backend/internal/models"
 	"trust-management/backend/internal/report"
@@ -90,7 +91,18 @@ func main() {
 			authRoutes.GET("/me", middleware.AuthMiddleware(cfg.JWTSecret), authHandler.Me)
 		}
 
-		// Authenticated Routes Group
+		// Public Donor Mobile App Routes
+		publicDonationHandler := donation.NewPublicDonationHandler(cfg)
+		bankHandlerPublic := bank.NewBankHandler(cfg)
+		schemeHandlerPublic := scheme.NewSchemeHandler()
+		api.GET("/public/app-donation-config", bankHandlerPublic.GetAppDonationConfig)
+		api.GET("/public/schemes/active", schemeHandlerPublic.GetPublicActiveSchemes)
+		api.POST("/public/donations/create-order", publicDonationHandler.CreateRazorpayOrder)
+		api.POST("/public/donations", publicDonationHandler.CreatePublicDonation)
+		api.GET("/public/donations/history", publicDonationHandler.GetPublicDonorHistory)
+		api.GET("/public/dashboard", publicDonationHandler.GetPublicDashboard)
+
+		// Authenticated Routes Group — standard user JWT check
 		protected := api.Group("", middleware.AuthMiddleware(cfg.JWTSecret))
 		closedDayCheck := middleware.ClosedDayProtectionMiddleware()
 		{
@@ -100,6 +112,7 @@ func main() {
 			protected.GET("/bank-accounts/active", bankHandler.GetActiveBankAccounts)
 			protected.POST("/bank-accounts", middleware.RequireRole(models.RoleAdmin), bankHandler.CreateBankAccount)
 			protected.PUT("/bank-accounts/:id", middleware.RequireRole(models.RoleAdmin), bankHandler.UpdateBankAccount)
+			protected.PUT("/bank-accounts/:id/set-app-donation", middleware.RequireRole(models.RoleAdmin), bankHandler.SetAppDonationAccount)
 			protected.GET("/bank-accounts/:id/transactions", bankHandler.GetBankTransactions)
 			protected.GET("/bank-accounts/day-summary", bankHandler.GetBankDaySummary)
 			protected.GET("/bank-accounts/:id/closing-status", bankHandler.GetBankClosingStatus)
@@ -143,6 +156,8 @@ func main() {
 			expenseHandler := expense.NewExpenseHandler()
 			protected.GET("/expenses", expenseHandler.GetExpenses)
 			protected.POST("/expenses", closedDayCheck, expenseHandler.CreateExpense)
+			protected.POST("/expenses/:id/approve", middleware.RequireRole(models.RoleAdmin), expenseHandler.ApproveExpense)
+			protected.POST("/expenses/:id/reject", middleware.RequireRole(models.RoleAdmin), expenseHandler.RejectExpense)
 
 			// Expense Categories — list is available to all staff (needed by the
 			// expense-creation form), create/update are Admin-only.
@@ -166,10 +181,26 @@ func main() {
 			protected.PUT("/unlock-requests/:id/review", middleware.RequireRole(models.RoleAdmin), unlockHandler.ReviewUnlockRequest)
 			protected.GET("/audit-logs", middleware.RequireRole(models.RoleAdmin), unlockHandler.GetAuditLogs)
 
-			// Vouchers
+			// Ledgers & Titles (Chart of Accounts)
+			ledgerHandler := ledger.NewLedgerHandler()
+			protected.GET("/ledgers", ledgerHandler.GetLedgers)
+			protected.POST("/ledgers", ledgerHandler.CreateLedger)
+			protected.PUT("/ledgers/:id", ledgerHandler.UpdateLedger)
+			protected.DELETE("/ledgers/:id", ledgerHandler.DeleteLedger)
+			protected.GET("/titles", ledgerHandler.GetTitles)
+			protected.POST("/titles", ledgerHandler.CreateTitle)
+			protected.PUT("/titles/:id", ledgerHandler.UpdateTitle)
+			protected.DELETE("/titles/:id", ledgerHandler.DeleteTitle)
+
+			// Vouchers (Income, Expense, Asset, Liability, Self Transfer, Donation Receipt)
 			voucherHandler := voucher.NewVoucherHandler()
 			protected.GET("/vouchers", voucherHandler.GetVouchers)
 			protected.GET("/vouchers/:id", voucherHandler.GetVoucherByID)
+			protected.POST("/vouchers", closedDayCheck, voucherHandler.CreateVoucher)
+			protected.POST("/vouchers/:id/approve", middleware.RequireRole(models.RoleAdmin), voucherHandler.ApproveVoucher)
+			protected.POST("/vouchers/:id/reject", middleware.RequireRole(models.RoleAdmin), voucherHandler.RejectVoucher)
+			protected.POST("/vouchers/:id/cancel", voucherHandler.CancelVoucher)
+			protected.GET("/reports/vouchers", voucherHandler.GetVoucherReport)
 
 			// File Uploads (donor docs/photo, bank QR codes, donation/expense attachments)
 			uploadHandler := upload.NewUploadHandler()
