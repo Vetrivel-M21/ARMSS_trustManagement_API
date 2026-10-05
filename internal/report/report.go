@@ -24,26 +24,41 @@ func NewReportHandler() *ReportHandler {
 // GetDailySummaryBook returns aggregated financial totals for a given date
 func (h *ReportHandler) GetDailySummaryBook(c *gin.Context) {
 	dateStr := c.DefaultQuery("date", shared.GetCurrentBusinessDate().Format("2006-01-02"))
+	targetBranchID := shared.ResolveBranchID(c)
 
+	cashInQuery := database.DB.Model(&models.CashTransaction{}).
+		Where("business_date = ? AND transaction_type = ?", dateStr, "INFLOW")
+	if targetBranchID != nil {
+		cashInQuery = cashInQuery.Where("branch_id = ?", *targetBranchID)
+	}
 	var cashInflow decimal.Decimal
-	database.DB.Model(&models.CashTransaction{}).
-		Where("business_date = ? AND transaction_type = ?", dateStr, "INFLOW").
-		Select("COALESCE(SUM(amount), 0)").Scan(&cashInflow)
+	cashInQuery.Select("COALESCE(SUM(amount), 0)").Scan(&cashInflow)
 
+	cashOutQuery := database.DB.Model(&models.CashTransaction{}).
+		Where("business_date = ? AND transaction_type = ?", dateStr, "OUTFLOW")
+	if targetBranchID != nil {
+		cashOutQuery = cashOutQuery.Where("branch_id = ?", *targetBranchID)
+	}
 	var cashOutflow decimal.Decimal
-	database.DB.Model(&models.CashTransaction{}).
-		Where("business_date = ? AND transaction_type = ?", dateStr, "OUTFLOW").
-		Select("COALESCE(SUM(amount), 0)").Scan(&cashOutflow)
+	cashOutQuery.Select("COALESCE(SUM(amount), 0)").Scan(&cashOutflow)
 
+	bankCreditQuery := database.DB.Model(&models.BankTransaction{}).
+		Where("business_date = ? AND transaction_type = ?", dateStr, "CREDIT")
+	if targetBranchID != nil {
+		bankCreditQuery = bankCreditQuery.Joins("JOIN bank_accounts ON bank_accounts.id = bank_transactions.bank_account_id").
+			Where("bank_accounts.branch_id = ?", *targetBranchID)
+	}
 	var bankCredit decimal.Decimal
-	database.DB.Model(&models.BankTransaction{}).
-		Where("business_date = ? AND transaction_type = ?", dateStr, "CREDIT").
-		Select("COALESCE(SUM(amount), 0)").Scan(&bankCredit)
+	bankCreditQuery.Select("COALESCE(SUM(amount), 0)").Scan(&bankCredit)
 
+	bankDebitQuery := database.DB.Model(&models.BankTransaction{}).
+		Where("business_date = ? AND transaction_type = ?", dateStr, "DEBIT")
+	if targetBranchID != nil {
+		bankDebitQuery = bankDebitQuery.Joins("JOIN bank_accounts ON bank_accounts.id = bank_transactions.bank_account_id").
+			Where("bank_accounts.branch_id = ?", *targetBranchID)
+	}
 	var bankDebit decimal.Decimal
-	database.DB.Model(&models.BankTransaction{}).
-		Where("business_date = ? AND transaction_type = ?", dateStr, "DEBIT").
-		Select("COALESCE(SUM(amount), 0)").Scan(&bankDebit)
+	bankDebitQuery.Select("COALESCE(SUM(amount), 0)").Scan(&bankDebit)
 
 	// Fetch scheme breakdown
 	type SchemeBreakdown struct {
@@ -53,12 +68,14 @@ func (h *ReportHandler) GetDailySummaryBook(c *gin.Context) {
 		Count       int64           `json:"count"`
 	}
 	var schemeBreakdown []SchemeBreakdown
-	database.DB.Model(&models.Donation{}).
+	donQuery := database.DB.Model(&models.Donation{}).
 		Select("COALESCE(schemes.name, NULLIF(donations.purpose, ''), 'General Donation') as scheme_name, COALESCE(schemes.category, 'GENERAL') as category, SUM(donations.amount) as total_amount, COUNT(donations.id) as count").
 		Joins("LEFT JOIN schemes ON schemes.id = donations.scheme_id").
-		Where("donations.business_date = ?", dateStr).
-		Group("scheme_name, schemes.category").
-		Scan(&schemeBreakdown)
+		Where("donations.business_date = ?", dateStr)
+	if targetBranchID != nil {
+		donQuery = donQuery.Where("donations.branch_id = ?", *targetBranchID)
+	}
+	donQuery.Group("scheme_name, schemes.category").Scan(&schemeBreakdown)
 
 	shared.SendSuccess(c, http.StatusOK, gin.H{
 		"business_date":    dateStr,
@@ -70,6 +87,87 @@ func (h *ReportHandler) GetDailySummaryBook(c *gin.Context) {
 		"net_bank":         bankCredit.Sub(bankDebit),
 		"total_collection": cashInflow.Add(bankCredit),
 		"scheme_summary":   schemeBreakdown,
+	})
+}
+
+// GetBranchComparisonReport provides side-by-side branch metrics for Super Admin
+func (h *ReportHandler) GetBranchComparisonReport(c *gin.Context) {
+	dateStr := c.DefaultQuery("date", shared.GetCurrentBusinessDate().Format("2006-01-02"))
+
+	type BranchMetric struct {
+		BranchID          uint            `json:"branch_id"`
+		BranchCode        string          `json:"branch_code"`
+		BranchName        string          `json:"branch_name"`
+		TotalDonations    decimal.Decimal `json:"total_donations"`
+		TotalExpenses     decimal.Decimal `json:"total_expenses"`
+		CashInflow        decimal.Decimal `json:"cash_inflow"`
+		CashOutflow       decimal.Decimal `json:"cash_outflow"`
+		NetCash           decimal.Decimal `json:"net_cash"`
+		VoucherCount      int64           `json:"voucher_count"`
+		LicenseExpiryDate *time.Time      `json:"license_expiry_date"`
+		LicenseStatus     string          `json:"license_status"`
+	}
+
+	var branches []models.Branch
+	database.DB.Where("is_active = ?", true).Order("id asc").Find(&branches)
+
+	var result []BranchMetric
+	now := time.Now()
+
+	for _, b := range branches {
+		var totalDon decimal.Decimal
+		database.DB.Model(&models.Donation{}).
+			Where("branch_id = ? AND business_date = ?", b.ID, dateStr).
+			Select("COALESCE(SUM(amount), 0)").Scan(&totalDon)
+
+		var totalExp decimal.Decimal
+		database.DB.Model(&models.Expense{}).
+			Where("branch_id = ? AND business_date = ? AND status IN ('APPROVED', 'ACTIVE')", b.ID, dateStr).
+			Select("COALESCE(SUM(amount), 0)").Scan(&totalExp)
+
+		var cashIn decimal.Decimal
+		database.DB.Model(&models.CashTransaction{}).
+			Where("branch_id = ? AND business_date = ? AND transaction_type = ?", b.ID, dateStr, "INFLOW").
+			Select("COALESCE(SUM(amount), 0)").Scan(&cashIn)
+
+		var cashOut decimal.Decimal
+		database.DB.Model(&models.CashTransaction{}).
+			Where("branch_id = ? AND business_date = ? AND transaction_type = ?", b.ID, dateStr, "OUTFLOW").
+			Select("COALESCE(SUM(amount), 0)").Scan(&cashOut)
+
+		var vCount int64
+		database.DB.Model(&models.Voucher{}).
+			Where("branch_id = ? AND business_date = ?", b.ID, dateStr).
+			Count(&vCount)
+
+		licStatus := "ACTIVE"
+		if b.LicenseExpiryDate != nil {
+			days := int(b.LicenseExpiryDate.Sub(now).Hours() / 24)
+			if days < 0 {
+				licStatus = "EXPIRED"
+			} else if days <= 30 {
+				licStatus = "EXPIRING_SOON"
+			}
+		}
+
+		result = append(result, BranchMetric{
+			BranchID:          b.ID,
+			BranchCode:        b.BranchCode,
+			BranchName:        b.Name,
+			TotalDonations:    totalDon,
+			TotalExpenses:     totalExp,
+			CashInflow:        cashIn,
+			CashOutflow:       cashOut,
+			NetCash:           cashIn.Sub(cashOut),
+			VoucherCount:      vCount,
+			LicenseExpiryDate: b.LicenseExpiryDate,
+			LicenseStatus:     licStatus,
+		})
+	}
+
+	shared.SendSuccess(c, http.StatusOK, gin.H{
+		"business_date": dateStr,
+		"branches":      result,
 	})
 }
 

@@ -26,7 +26,13 @@ func NewExpenseHandler() *ExpenseHandler {
 // GetExpenses returns expense register with preloads and associated vouchers
 func (h *ExpenseHandler) GetExpenses(c *gin.Context) {
 	var expenses []models.Expense
-	if err := database.DB.Preload("BankAccount").Preload("CreatedBy").Preload("ApprovedBy").Order("id desc").Find(&expenses).Error; err != nil {
+	query := database.DB.Preload("Branch").Preload("BankAccount").Preload("CreatedBy").Preload("ApprovedBy").Order("id desc")
+
+	if targetBranchID := shared.ResolveBranchID(c); targetBranchID != nil {
+		query = query.Where("branch_id = ?", *targetBranchID)
+	}
+
+	if err := query.Find(&expenses).Error; err != nil {
 		shared.SendAppError(c, http.StatusInternalServerError, "Failed to fetch expenses")
 		return
 	}
@@ -112,7 +118,13 @@ func (h *ExpenseHandler) CreateExpense(c *gin.Context) {
 	}
 	expenseNumber := fmt.Sprintf("EXP-%d-%05d", bizDate.Year(), expSeq)
 
+	targetBranchID := uint(1)
+	if resolved := shared.ResolveBranchID(c); resolved != nil {
+		targetBranchID = *resolved
+	}
+
 	expense := models.Expense{
+		BranchID:        targetBranchID,
 		ExpenseNumber:   expenseNumber,
 		BusinessDate:    bizDate,
 		PaymentMode:     paymentMode,
@@ -226,6 +238,7 @@ func (h *ExpenseHandler) ApproveExpense(c *gin.Context) {
 		}
 	} else if expense.PaymentMode == models.PaymentModeCash {
 		cashTx := models.CashTransaction{
+			BranchID:        expense.BranchID,
 			BusinessDate:    expense.BusinessDate,
 			TransactionType: "OUTFLOW",
 			Amount:          expense.Amount,
@@ -241,8 +254,14 @@ func (h *ExpenseHandler) ApproveExpense(c *gin.Context) {
 		}
 	}
 
-	// Generate Expense Voucher Code (e.g. ACHT/1/26-27) via atomic sequence counter
-	voucherNumber, err := shared.GenerateVoucherNumber(tx, expense.BusinessDate)
+	// Generate Expense Voucher Code (e.g. ACHT/1/26-27 or ACHT-MDU/1/26-27) via atomic sequence counter
+	var bCode string
+	var targetBranch models.Branch
+	if err := tx.First(&targetBranch, expense.BranchID).Error; err == nil {
+		bCode = targetBranch.BranchCode
+	}
+
+	voucherNumber, err := shared.GenerateBranchVoucherNumber(tx, bCode, expense.BusinessDate)
 	if err != nil {
 		tx.Rollback()
 		shared.SendAppError(c, http.StatusInternalServerError, "Failed to generate voucher number")
@@ -250,6 +269,7 @@ func (h *ExpenseHandler) ApproveExpense(c *gin.Context) {
 	}
 
 	voucher := models.Voucher{
+		BranchID:         expense.BranchID,
 		VoucherNumber:    voucherNumber,
 		VoucherType:      "EXPENSE_VOUCHER",
 		BusinessDate:     expense.BusinessDate,

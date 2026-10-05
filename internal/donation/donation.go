@@ -26,7 +26,11 @@ func NewDonationHandler() *DonationHandler {
 // GetDonations fetches donations list with preloads and optional filters
 func (h *DonationHandler) GetDonations(c *gin.Context) {
 	var donations []models.Donation
-	query := database.DB.Preload("Donor").Preload("Scheme").Preload("CreatedBy").Order("id desc")
+	query := database.DB.Preload("Branch").Preload("Donor").Preload("Scheme").Preload("CreatedBy").Order("id desc")
+
+	if targetBranchID := shared.ResolveBranchID(c); targetBranchID != nil {
+		query = query.Where("donations.branch_id = ?", *targetBranchID)
+	}
 
 	if paymentMode := c.Query("payment_mode"); paymentMode != "" {
 		query = query.Where("payment_mode = ?", paymentMode)
@@ -144,7 +148,13 @@ func (h *DonationHandler) CreateDonation(c *gin.Context) {
 		source = "WEB"
 	}
 
+	targetBranchID := uint(1)
+	if resolved := shared.ResolveBranchID(c); resolved != nil {
+		targetBranchID = *resolved
+	}
+
 	donation := models.Donation{
+		BranchID:                targetBranchID,
 		DonationNumber:          donationNumber,
 		DonorID:                 req.DonorID,
 		BusinessDate:            bizDate,
@@ -181,6 +191,7 @@ func (h *DonationHandler) CreateDonation(c *gin.Context) {
 	if paymentMode == models.PaymentModeCash {
 		// Create Cash Inflow transaction
 		cashTx := models.CashTransaction{
+			BranchID:        targetBranchID,
 			BusinessDate:    bizDate,
 			TransactionType: "INFLOW",
 			Amount:          req.Amount,
@@ -247,8 +258,14 @@ func (h *DonationHandler) CreateDonation(c *gin.Context) {
 		}
 	}
 
-	// 8. Generate Unique Voucher Code (e.g. ACHT/1/26-27) via atomic per-financial-year sequence counter
-	voucherNumber, err := shared.GenerateVoucherNumber(tx, bizDate)
+	// 8. Generate Unique Voucher Code (e.g. ACHT/1/26-27 or ACHT-MDU/1/26-27) via atomic sequence counter
+	var bCode string
+	var targetBranch models.Branch
+	if err := tx.First(&targetBranch, targetBranchID).Error; err == nil {
+		bCode = targetBranch.BranchCode
+	}
+
+	voucherNumber, err := shared.GenerateBranchVoucherNumber(tx, bCode, bizDate)
 	if err != nil {
 		tx.Rollback()
 		shared.SendAppError(c, http.StatusInternalServerError, "Failed to generate voucher number")
@@ -260,6 +277,7 @@ func (h *DonationHandler) CreateDonation(c *gin.Context) {
 	tx.First(&donor, req.DonorID)
 
 	voucher := models.Voucher{
+		BranchID:         targetBranchID,
 		VoucherNumber:    voucherNumber,
 		VoucherType:      "DONATION_RECEIPT",
 		BusinessDate:     bizDate,
@@ -313,7 +331,7 @@ func (h *DonationHandler) GetDonationByID(c *gin.Context) {
 	}
 
 	var donation models.Donation
-	if err := database.DB.Preload("Donor").Preload("Scheme").Preload("CreatedBy").First(&donation, id).Error; err != nil {
+	if err := database.DB.Preload("Branch").Preload("Donor").Preload("Scheme").Preload("CreatedBy").First(&donation, id).Error; err != nil {
 		shared.SendAppError(c, http.StatusNotFound, "Donation not found")
 		return
 	}
@@ -326,3 +344,215 @@ func (h *DonationHandler) GetDonationByID(c *gin.Context) {
 		"voucher":  voucher,
 	})
 }
+
+// GetPendingDonations returns online donations awaiting branch verification
+func (h *DonationHandler) GetPendingDonations(c *gin.Context) {
+	var donations []models.Donation
+	query := database.DB.Preload("Branch").Preload("Donor").Preload("Scheme").Preload("CreatedBy").
+		Where("verification_status = ? OR status = ?", "PENDING", "PENDING_VERIFICATION").
+		Order("id desc")
+
+	if targetBranchID := shared.ResolveBranchID(c); targetBranchID != nil {
+		query = query.Where("donations.branch_id = ?", *targetBranchID)
+	}
+
+	if err := query.Find(&donations).Error; err != nil {
+		shared.SendAppError(c, http.StatusInternalServerError, "Failed to fetch pending donations")
+		return
+	}
+
+	shared.SendSuccess(c, http.StatusOK, donations)
+}
+
+// ApproveDonation verifies an incoming online donation, marks it active, generates receipt credit in bank ledger
+func (h *DonationHandler) ApproveDonation(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		shared.SendAppError(c, http.StatusBadRequest, "Invalid donation ID")
+		return
+	}
+
+	userIDVal, exists := c.Get("userID")
+	if !exists {
+		shared.SendAppError(c, http.StatusUnauthorized, "User context missing")
+		return
+	}
+	userID := userIDVal.(uint)
+
+	var donation models.Donation
+	if err := database.DB.Preload("Branch").Preload("Donor").First(&donation, id).Error; err != nil {
+		shared.SendAppError(c, http.StatusNotFound, "Donation not found")
+		return
+	}
+
+	// Ensure branch authorization
+	if targetBranchID := shared.ResolveBranchID(c); targetBranchID != nil {
+		if donation.BranchID != *targetBranchID {
+			shared.SendAppError(c, http.StatusForbidden, "You are not authorized to verify donations for another branch")
+			return
+		}
+	}
+
+	if donation.VerificationStatus == "VERIFIED" {
+		shared.SendAppError(c, http.StatusBadRequest, "Donation is already verified and approved")
+		return
+	}
+
+	var approveReq struct {
+		BankAccountID *uint `json:"bank_account_id"`
+	}
+	_ = c.ShouldBindJSON(&approveReq)
+
+	now := time.Now()
+	bizDate := shared.GetCurrentBusinessDate()
+
+	tx := database.DB.Begin()
+
+	// 1. Update donation status
+	donation.VerificationStatus = "VERIFIED"
+	donation.Status = "ACTIVE"
+	donation.VerifiedByID = &userID
+	donation.VerifiedAt = &now
+	if approveReq.BankAccountID != nil && *approveReq.BankAccountID > 0 {
+		donation.BankAccountID = approveReq.BankAccountID
+	}
+
+	if err := tx.Save(&donation).Error; err != nil {
+		tx.Rollback()
+		shared.SendAppError(c, http.StatusInternalServerError, "Failed to approve donation: "+err.Error())
+		return
+	}
+
+	// 2. Update linked voucher
+	var voucher models.Voucher
+	if err := tx.Where("source_type = ? AND source_id = ?", "DONATION", donation.ID).First(&voucher).Error; err == nil {
+		voucher.Status = "ISSUED"
+		_ = tx.Save(&voucher)
+	}
+
+	// 3. Post Bank Credit Transaction if bank account is linked
+	if donation.BankAccountID != nil && *donation.BankAccountID > 0 {
+		var bankAccount models.BankAccount
+		if err := tx.First(&bankAccount, *donation.BankAccountID).Error; err == nil {
+			donorName := "Anonymous"
+			if donation.Donor != nil {
+				donorName = donation.Donor.FullName
+			}
+			bankTx := models.BankTransaction{
+				BankAccountID:   bankAccount.ID,
+				BusinessDate:    bizDate,
+				TransactionType: "CREDIT",
+				Amount:          donation.Amount,
+				Category:        "DONATION",
+				ReferenceNumber: donation.ReferenceNumber,
+				SourceType:      "DONATION",
+				SourceID:        donation.ID,
+				SourceChannel:   "MOBILE_APP",
+				Description:     fmt.Sprintf("Verified Online Donation %s - %s (%s)", donation.DonationNumber, donorName, donation.Purpose),
+				CreatedByID:     userID,
+			}
+			_ = tx.Create(&bankTx)
+
+			// Increment bank balance
+			_ = tx.Model(&bankAccount).Update("current_balance", gorm.Expr("current_balance + ?", donation.Amount))
+		}
+	}
+
+	// 4. Audit Log
+	audit := models.AuditLog{
+		UserID:     &userID,
+		Action:     "DONATION_APPROVED",
+		EntityName: "Donation",
+		EntityID:   donation.ID,
+		AfterData:  shared.JSONOrNull(donation),
+		IPAddress:  c.ClientIP(),
+	}
+	_ = tx.Create(&audit)
+
+	tx.Commit()
+
+	shared.SendSuccess(c, http.StatusOK, gin.H{
+		"message":  "Donation verified and approved successfully! 80G receipt is now unlocked.",
+		"donation": donation,
+		"voucher":  voucher,
+	})
+}
+
+// RejectDonation rejects an invalid or unverified donation payment reference
+func (h *DonationHandler) RejectDonation(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		shared.SendAppError(c, http.StatusBadRequest, "Invalid donation ID")
+		return
+	}
+
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	if strings.TrimSpace(req.Reason) == "" {
+		req.Reason = "Payment verification failed / UTR not found"
+	}
+
+	userIDVal, exists := c.Get("userID")
+	if !exists {
+		shared.SendAppError(c, http.StatusUnauthorized, "User context missing")
+		return
+	}
+	userID := userIDVal.(uint)
+
+	var donation models.Donation
+	if err := database.DB.First(&donation, id).Error; err != nil {
+		shared.SendAppError(c, http.StatusNotFound, "Donation not found")
+		return
+	}
+
+	if targetBranchID := shared.ResolveBranchID(c); targetBranchID != nil {
+		if donation.BranchID != *targetBranchID {
+			shared.SendAppError(c, http.StatusForbidden, "You are not authorized to verify donations for another branch")
+			return
+		}
+	}
+
+	now := time.Now()
+	tx := database.DB.Begin()
+
+	donation.VerificationStatus = "REJECTED"
+	donation.Status = "REJECTED"
+	donation.RejectionReason = strings.TrimSpace(req.Reason)
+	donation.VerifiedByID = &userID
+	donation.VerifiedAt = &now
+
+	if err := tx.Save(&donation).Error; err != nil {
+		tx.Rollback()
+		shared.SendAppError(c, http.StatusInternalServerError, "Failed to reject donation: "+err.Error())
+		return
+	}
+
+	// Mark voucher rejected
+	var voucher models.Voucher
+	if err := tx.Where("source_type = ? AND source_id = ?", "DONATION", donation.ID).First(&voucher).Error; err == nil {
+		voucher.Status = "REJECTED"
+		_ = tx.Save(&voucher)
+	}
+
+	audit := models.AuditLog{
+		UserID:     &userID,
+		Action:     "DONATION_REJECTED",
+		EntityName: "Donation",
+		EntityID:   donation.ID,
+		AfterData:  shared.JSONOrNull(donation),
+		IPAddress:  c.ClientIP(),
+	}
+	_ = tx.Create(&audit)
+
+	tx.Commit()
+
+	shared.SendSuccess(c, http.StatusOK, gin.H{
+		"message":  "Donation rejected",
+		"donation": donation,
+	})
+}
+

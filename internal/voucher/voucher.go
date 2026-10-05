@@ -28,6 +28,7 @@ func NewVoucherHandler() *VoucherHandler {
 func (h *VoucherHandler) GetVouchers(c *gin.Context) {
 	var vouchers []models.Voucher
 	query := database.DB.
+		Preload("Branch").
 		Preload("Ledger").
 		Preload("Title").
 		Preload("BankAccount").
@@ -36,6 +37,10 @@ func (h *VoucherHandler) GetVouchers(c *gin.Context) {
 		Preload("CreatedBy").
 		Preload("ApprovedBy").
 		Order("business_date desc, id desc")
+
+	if targetBranchID := shared.ResolveBranchID(c); targetBranchID != nil {
+		query = query.Where("branch_id = ?", *targetBranchID)
+	}
 
 	if voucherType := c.Query("type"); voucherType != "" && voucherType != "ALL" {
 		query = query.Where("voucher_type = ?", strings.ToUpper(voucherType))
@@ -96,6 +101,7 @@ type CreateVoucherRequest struct {
 	Amount            decimal.Decimal `json:"amount" binding:"required"`
 	Details           string          `json:"details"`
 	AttachmentPath    string          `json:"attachment_path"`
+	BranchID          *uint           `json:"branch_id"`
 	AutoApprove       bool            `json:"auto_approve"` // If true, issue and post immediately without pending queue
 }
 
@@ -179,6 +185,7 @@ func postVoucherFinancials(tx *gorm.DB, voucher *models.Voucher, actorID uint) e
 		} else {
 			// Bank to cash withdrawal: Cash Inflow
 			cashIn := models.CashTransaction{
+				BranchID:        voucher.BranchID,
 				BusinessDate:    bizDate,
 				TransactionType: "INFLOW",
 				Amount:          amount,
@@ -198,6 +205,7 @@ func postVoucherFinancials(tx *gorm.DB, voucher *models.Voucher, actorID uint) e
 			flowType = "INFLOW"
 		}
 		ct := models.CashTransaction{
+			BranchID:        voucher.BranchID,
 			BusinessDate:    bizDate,
 			TransactionType: flowType,
 			Amount:          amount,
@@ -358,14 +366,29 @@ func (h *VoucherHandler) CreateVoucher(c *gin.Context) {
 		approvedAt = &now
 	}
 
+	// Determine target branch
+	targetBranchID := uint(1)
+	if req.BranchID != nil && *req.BranchID > 0 {
+		targetBranchID = *req.BranchID
+	} else if resolved := shared.ResolveBranchID(c); resolved != nil {
+		targetBranchID = *resolved
+	}
+
+	var bCode string
+	var targetBranch models.Branch
+	if err := database.DB.First(&targetBranch, targetBranchID).Error; err == nil {
+		bCode = targetBranch.BranchCode
+	}
+
 	err := database.DB.Transaction(func(tx *gorm.DB) error {
-		// Generate sequential voucher number atomically
-		vNo, err := shared.GenerateVoucherNumber(tx, bizDate)
+		// Generate sequential voucher number atomically per branch
+		vNo, err := shared.GenerateBranchVoucherNumber(tx, bCode, bizDate)
 		if err != nil {
 			return fmt.Errorf("generating voucher number: %w", err)
 		}
 
 		voucher = models.Voucher{
+			BranchID:          targetBranchID,
 			VoucherNumber:     vNo,
 			VoucherType:       vType,
 			LedgerID:          ledgerID,
@@ -532,6 +555,7 @@ func (h *VoucherHandler) GetVoucherByID(c *gin.Context) {
 
 	var voucher models.Voucher
 	if err := database.DB.
+		Preload("Branch").
 		Preload("Ledger").
 		Preload("Title").
 		Preload("BankAccount").
@@ -546,6 +570,8 @@ func (h *VoucherHandler) GetVoucherByID(c *gin.Context) {
 
 	result := gin.H{
 		"id":                    voucher.ID,
+		"branch_id":              voucher.BranchID,
+		"branch":                 voucher.Branch,
 		"voucher_number":        voucher.VoucherNumber,
 		"voucher_type":          voucher.VoucherType,
 		"business_date":         voucher.BusinessDate,
@@ -663,12 +689,17 @@ func (h *VoucherHandler) GetVoucherReport(c *gin.Context) {
 	status := c.Query("status")
 
 	query := database.DB.Model(&models.Voucher{}).
+		Preload("Branch").
 		Preload("Ledger").
 		Preload("Title").
 		Preload("BankAccount").
 		Preload("FromBankAccount").
 		Preload("ToBankAccount").
 		Order("business_date desc, id desc")
+
+	if targetBranchID := shared.ResolveBranchID(c); targetBranchID != nil {
+		query = query.Where("branch_id = ?", *targetBranchID)
+	}
 
 	if fromDate != "" {
 		query = query.Where("business_date >= ?", fromDate)

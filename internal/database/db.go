@@ -51,6 +51,11 @@ func InitDB(cfg *config.Config) (*gorm.DB, error) {
 		log.Warn().Err(err).Msg("Database seeding completed with warnings")
 	}
 
+	// Ensure the 3 operational branches (Old Age Home, Children Home, Children Adoption Home) exist
+	if err := EnsureDefaultBranches(db); err != nil {
+		log.Warn().Err(err).Msg("Failed to verify default branches")
+	}
+
 	DB = db
 	return db, nil
 }
@@ -125,3 +130,106 @@ func Seed(db *gorm.DB) error {
 	log.Info().Msg("Database seeding completed successfully.")
 	return nil
 }
+
+// EnsureDefaultBranches guarantees that the three primary operational branches exist:
+// 1: Old Age Home (OAH) / முதியோர்கள் இல்லம்
+// 2: Children Home (CH) / குழந்தைகள் இல்லம்
+// 3: Children Adoption Home (CAH) / சிறப்பு தத்தெடுத்தல் மையம்
+func EnsureDefaultBranches(db *gorm.DB) error {
+	// 1. Check Branch 1: If MAIN or empty, update to Old Age Home
+	var b1 models.Branch
+	if err := db.First(&b1, 1).Error; err == nil {
+		if b1.BranchCode == "MAIN" || b1.Name == "Head Office / Main Branch" || b1.BranchCode == "" {
+			db.Model(&b1).Updates(map[string]interface{}{
+				"branch_code":    "OAH",
+				"name":           "Old Age Home",
+				"tamil_name":     "முதியோர்கள் இல்லம்",
+				"license_number": "DSD/MDU/OAH/2024",
+				"incharge_name":  "Dr. K. Murugan",
+				"city":           "Madurai",
+				"state":          "Tamil Nadu",
+				"is_active":      true,
+			})
+		}
+	} else {
+		b1 = models.Branch{
+			ID:            1,
+			BranchCode:    "OAH",
+			Name:          "Old Age Home",
+			TamilName:     "முதியோர்கள் இல்லம்",
+			LicenseNumber: "DSD/MDU/OAH/2024",
+			InchargeName:  "Dr. K. Murugan",
+			City:          "Madurai",
+			State:         "Tamil Nadu",
+			IsActive:      true,
+		}
+		_ = db.Create(&b1)
+	}
+
+	// 2. Branch 2: Children Home
+	var b2 models.Branch
+	if err := db.First(&b2, 2).Error; err != nil {
+		b2 = models.Branch{
+			ID:            2,
+			BranchCode:    "CH",
+			Name:          "Children Home",
+			TamilName:     "குழந்தைகள் இல்லம்",
+			LicenseNumber: "DSD/MDU/CH/2024",
+			InchargeName:  "Mrs. S. Meenakshi",
+			City:          "Madurai",
+			State:         "Tamil Nadu",
+			IsActive:      true,
+		}
+		_ = db.Create(&b2)
+	}
+
+	// 3. Branch 3: Children Adoption Home
+	var b3 models.Branch
+	if err := db.First(&b3, 3).Error; err != nil {
+		b3 = models.Branch{
+			ID:            3,
+			BranchCode:    "CAH",
+			Name:          "Children Adoption Home",
+			TamilName:     "சிறப்பு தத்தெடுத்தல் மையம்",
+			LicenseNumber: "DSD/MDU/SAA/2024",
+			InchargeName:  "Dr. R. Anitha",
+			City:          "Madurai",
+			State:         "Tamil Nadu",
+			IsActive:      true,
+		}
+		_ = db.Create(&b3)
+	}
+
+	// 4. Sync UPI and QR code paths from trust_home_configs into branches if present
+	var homes []models.TrustHomeConfig
+	if err := db.Find(&homes).Error; err == nil {
+		for _, h := range homes {
+			switch h.HomeKey {
+			case "OLD_AGE_HOME":
+				if h.UPIID != "" || h.QRCodePath != "" {
+					db.Model(&models.Branch{}).Where("id = ? OR branch_code = ?", 1, "OAH").Updates(map[string]interface{}{
+						"upi_id":       h.UPIID,
+						"qr_code_path": h.QRCodePath,
+					})
+				}
+			case "CHILDREN_HOME":
+				if h.UPIID != "" || h.QRCodePath != "" {
+					db.Model(&models.Branch{}).Where("id = ? OR branch_code = ?", 2, "CH").Updates(map[string]interface{}{
+						"upi_id":       h.UPIID,
+						"qr_code_path": h.QRCodePath,
+					})
+				}
+			case "ADOPTION_HOME":
+				if h.UPIID != "" || h.QRCodePath != "" {
+					db.Model(&models.Branch{}).Where("id = ? OR branch_code = ?", 3, "CAH").Updates(map[string]interface{}{
+						"upi_id":       h.UPIID,
+						"qr_code_path": h.QRCodePath,
+					})
+				}
+			}
+		}
+	}
+
+	return nil
+}
+

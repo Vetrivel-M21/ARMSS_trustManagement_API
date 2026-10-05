@@ -16,6 +16,7 @@ type JWTClaims struct {
 	UserID   uint        `json:"user_id"`
 	Username string      `json:"username"`
 	Role     models.Role `json:"role"`
+	BranchID *uint       `json:"branch_id,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -24,6 +25,7 @@ func GenerateToken(user *models.User, jwtSecret string) (string, error) {
 		UserID:   user.ID,
 		Username: user.Username,
 		Role:     user.Role,
+		BranchID: user.BranchID,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(8 * time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -72,6 +74,10 @@ func AuthMiddleware(jwtSecret string) gin.HandlerFunc {
 		c.Set("userID", claims.UserID)
 		c.Set("username", claims.Username)
 		c.Set("role", claims.Role)
+		if claims.BranchID != nil {
+			c.Set("branch_id", *claims.BranchID)
+			c.Set("branchID", *claims.BranchID)
+		}
 
 		c.Next()
 	}

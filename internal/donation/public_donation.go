@@ -17,7 +17,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
-	"gorm.io/gorm"
 )
 
 type PublicDonationHandler struct {
@@ -155,7 +154,38 @@ func (h *PublicDonationHandler) CreatePublicDonation(c *gin.Context) {
 		refNum = donationNumber
 	}
 
+	trustHome := strings.TrimSpace(req.TrustHome)
+	if trustHome == "" {
+		trustHome = "OLD_AGE_HOME"
+	}
+
+	// Resolve the specific operational branch for this donation
+	var targetBranch models.Branch
+	switch strings.ToUpper(trustHome) {
+	case "OLD_AGE_HOME", "OAH":
+		if err := tx.Where("branch_code = ? OR id = ?", "OAH", 1).First(&targetBranch).Error; err != nil {
+			targetBranch.ID = 1
+			targetBranch.Name = "Old Age Home"
+		}
+	case "CHILDREN_HOME", "CH":
+		if err := tx.Where("branch_code = ? OR id = ?", "CH", 2).First(&targetBranch).Error; err != nil {
+			targetBranch.ID = 2
+			targetBranch.Name = "Children Home"
+		}
+	case "ADOPTION_HOME", "CAH":
+		if err := tx.Where("branch_code = ? OR id = ?", "CAH", 3).First(&targetBranch).Error; err != nil {
+			targetBranch.ID = 3
+			targetBranch.Name = "Children Adoption Home"
+		}
+	default:
+		if err := tx.Where("branch_code = ?", strings.ToUpper(trustHome)).First(&targetBranch).Error; err != nil {
+			targetBranch.ID = 1
+			targetBranch.Name = "Old Age Home"
+		}
+	}
+
 	donation := models.Donation{
+		BranchID:                targetBranch.ID,
 		DonationNumber:          donationNumber,
 		DonorID:                 donor.ID,
 		BusinessDate:            bizDate,
@@ -165,9 +195,10 @@ func (h *PublicDonationHandler) CreatePublicDonation(c *gin.Context) {
 		Category:                category,
 		Reason:                  req.Reason,
 		Source:                  "MOBILE_APP",
+		TrustHome:               trustHome,
 		PaymentGatewayOrderID:   req.PaymentGatewayOrderID,
 		PaymentGatewayPaymentID: req.PaymentGatewayPaymentID,
-		VerificationStatus:      "VERIFIED",
+		VerificationStatus:      "PENDING",
 		SchemeID:                req.SchemeID,
 		EventType:               req.EventType,
 		EventPersonName:         req.EventPersonName,
@@ -175,7 +206,8 @@ func (h *PublicDonationHandler) CreatePublicDonation(c *gin.Context) {
 		RelationshipToDonor:     req.RelationshipToDonor,
 		BankAccountID:           &bankAccount.ID,
 		ReferenceNumber:         refNum,
-		Status:                  "ACTIVE",
+		AttachmentPath:          strings.TrimSpace(req.AttachmentPath),
+		Status:                  "PENDING_VERIFICATION",
 		CreatedByID:             systemUserID,
 	}
 
@@ -185,37 +217,11 @@ func (h *PublicDonationHandler) CreatePublicDonation(c *gin.Context) {
 		return
 	}
 
-	// 5. Post Bank Transaction with source_channel = 'MOBILE_APP'
-	bankTx := models.BankTransaction{
-		BankAccountID:   bankAccount.ID,
-		BusinessDate:    bizDate,
-		TransactionType: "CREDIT",
-		Amount:          req.Amount,
-		Category:        "DONATION",
-		ReferenceNumber: refNum,
-		SourceType:      "DONATION",
-		SourceID:        donation.ID,
-		SourceChannel:   "MOBILE_APP",
-		Description:     fmt.Sprintf("Mobile App Donation %s - %s (%s)", donation.DonationNumber, donor.FullName, purpose),
-		CreatedByID:     systemUserID,
-	}
-	if err := tx.Create(&bankTx).Error; err != nil {
-		tx.Rollback()
-		shared.SendAppError(c, http.StatusInternalServerError, "Failed to record bank credit transaction")
-		return
-	}
-
-	// Atomically increment current balance on the bank account
-	if err := tx.Model(&bankAccount).Update("current_balance", gorm.Expr("current_balance + ?", req.Amount)).Error; err != nil {
-		tx.Rollback()
-		shared.SendAppError(c, http.StatusInternalServerError, "Failed to update bank balance")
-		return
-	}
-
-	// 6. Generate Unique Voucher Code
+	// 5. Generate Voucher code in PENDING status (Official 80G receipt issued upon staff/admin approval)
 	voucherNumber, err := shared.GenerateVoucherNumber(tx, bizDate)
 	if err == nil {
 		voucher := models.Voucher{
+			BranchID:         targetBranch.ID,
 			VoucherNumber:    voucherNumber,
 			VoucherType:      "DONATION_RECEIPT",
 			BusinessDate:     bizDate,
@@ -224,6 +230,7 @@ func (h *PublicDonationHandler) CreatePublicDonation(c *gin.Context) {
 			PayeeOrDonorName: donor.FullName,
 			Amount:           req.Amount,
 			AmountInWords:    shared.ConvertAmountToWords(req.Amount),
+			Status:           "PENDING",
 			CreatedByID:      systemUserID,
 		}
 		_ = tx.Create(&voucher)
@@ -232,22 +239,24 @@ func (h *PublicDonationHandler) CreatePublicDonation(c *gin.Context) {
 	tx.Commit()
 
 	response := gin.H{
-		"donation_id":        donation.ID,
-		"donation_number":    donation.DonationNumber,
-		"voucher_number":     voucherNumber,
-		"donor_name":         donor.FullName,
-		"donor_phone":        donor.Phone,
-		"donor_pan":          donor.PANNumber,
-		"amount":             req.Amount,
-		"category":           category,
-		"purpose":            purpose,
-		"scheme_name":        schemeName,
-		"business_date":      bizDate.Format("2006-01-02"),
-		"bank_name":          bankAccount.BankName,
-		"account_name":       bankAccount.AccountName,
-		"reference_number":   refNum,
-		"verification_status": "VERIFIED",
-		"message":            "Donation received and verified successfully. Thank you for your support!",
+		"donation_id":         donation.ID,
+		"donation_number":     donation.DonationNumber,
+		"voucher_number":      voucherNumber,
+		"branch_id":           targetBranch.ID,
+		"branch_name":         targetBranch.Name,
+		"donor_name":          donor.FullName,
+		"donor_phone":         donor.Phone,
+		"donor_pan":           donor.PANNumber,
+		"amount":              req.Amount,
+		"category":            category,
+		"purpose":             purpose,
+		"scheme_name":         schemeName,
+		"business_date":       bizDate.Format("2006-01-02"),
+		"bank_name":           bankAccount.BankName,
+		"account_name":        bankAccount.AccountName,
+		"reference_number":    refNum,
+		"verification_status": "PENDING",
+		"message":             fmt.Sprintf("Donation submitted successfully! Your payment reference (%s) is pending verification by %s staff. Your official 80G receipt will be unlocked once approved.", refNum, targetBranch.Name),
 	}
 
 	shared.SendSuccess(c, http.StatusCreated, response)
@@ -292,6 +301,7 @@ func (h *PublicDonationHandler) GetPublicDonorHistory(c *gin.Context) {
 			VerificationStatus:      d.VerificationStatus,
 			PaymentGatewayPaymentID: d.PaymentGatewayPaymentID,
 			UPIReferenceNumber:      d.ReferenceNumber,
+			AttachmentPath:          d.AttachmentPath,
 			CreatedAt:               d.CreatedAt,
 		})
 	}
@@ -319,8 +329,8 @@ func (h *PublicDonationHandler) GetPublicDashboard(c *gin.Context) {
 	database.DB.Model(&models.Donor{}).Where("is_active = ?", true).Count(&totalDonorsCount)
 
 	dashboardData := gin.H{
-		"trust_name":        "Sri Agathiyar Sanmarga Charitable Trust",
-		"tagline":           "Selfless Service & Annadhanam for All",
+		"trust_name":        "Nesakkaram Trust",
+		"tagline":           "Service to Humanity • Elderly Care, Children Welfare & Adoption",
 		"tax_exemption":     "80G Tax Exemption Certificate Available",
 		"active_schemes":    activeSchemesCount,
 		"total_donors":      totalDonorsCount,

@@ -6,12 +6,14 @@ type CreateUserRequest struct {
 	Email    string `json:"email" binding:"required,email"`
 	Password string `json:"password" binding:"required,min=8"`
 	Role     string `json:"role" binding:"required"` // STAFF / ADMIN
+	BranchID *uint  `json:"branch_id"`
 }
 
 type UpdateUserRequest struct {
 	FullName string  `json:"full_name"`
 	Email    string  `json:"email"`
 	Role     string  `json:"role"`
+	BranchID *uint   `json:"branch_id"`
 	IsActive *bool   `json:"is_active"`
 	Password *string `json:"password"` // set to reset the password; omit to leave unchanged
 }

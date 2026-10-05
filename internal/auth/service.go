@@ -19,7 +19,7 @@ func NewAuthService() *AuthService {
 
 func (s *AuthService) Login(req *dto.LoginRequest, jwtSecret string) (*dto.LoginResponse, error) {
 	var user models.User
-	if err := database.DB.Where("username = ? AND is_active = ?", req.Username, true).First(&user).Error; err != nil {
+	if err := database.DB.Preload("Branch").Where("username = ? AND is_active = ?", req.Username, true).First(&user).Error; err != nil {
 		return nil, errors.New("invalid username or password")
 	}
 
@@ -32,28 +32,41 @@ func (s *AuthService) Login(req *dto.LoginRequest, jwtSecret string) (*dto.Login
 		return nil, errors.New("failed to generate access token")
 	}
 
-	return &dto.LoginResponse{
-		Token: token,
-		User: dto.UserSummary{
-			ID:       user.ID,
-			Username: user.Username,
-			FullName: user.FullName,
-			Email:    user.Email,
-			Role:     string(user.Role),
-		},
-	}, nil
-}
-
-func (s *AuthService) GetUserProfile(userID uint) (*dto.UserSummary, error) {
-	var user models.User
-	if err := database.DB.First(&user, userID).Error; err != nil {
-		return nil, errors.New("user not found")
-	}
-	return &dto.UserSummary{
+	summary := dto.UserSummary{
 		ID:       user.ID,
 		Username: user.Username,
 		FullName: user.FullName,
 		Email:    user.Email,
 		Role:     string(user.Role),
+		BranchID: user.BranchID,
+	}
+	if user.Branch != nil {
+		summary.BranchCode = user.Branch.BranchCode
+		summary.BranchName = user.Branch.Name
+	}
+
+	return &dto.LoginResponse{
+		Token: token,
+		User:  summary,
 	}, nil
+}
+
+func (s *AuthService) GetUserProfile(userID uint) (*dto.UserSummary, error) {
+	var user models.User
+	if err := database.DB.Preload("Branch").First(&user, userID).Error; err != nil {
+		return nil, errors.New("user not found")
+	}
+	summary := dto.UserSummary{
+		ID:       user.ID,
+		Username: user.Username,
+		FullName: user.FullName,
+		Email:    user.Email,
+		Role:     string(user.Role),
+		BranchID: user.BranchID,
+	}
+	if user.Branch != nil {
+		summary.BranchCode = user.Branch.BranchCode
+		summary.BranchName = user.Branch.Name
+	}
+	return &summary, nil
 }

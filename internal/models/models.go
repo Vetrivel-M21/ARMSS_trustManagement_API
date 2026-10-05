@@ -29,6 +29,30 @@ const (
 	DayStatusUnlocked     BusinessDayStatus = "UNLOCKED"
 )
 
+type Branch struct {
+	ID                  uint       `gorm:"primaryKey;autoIncrement" json:"id"`
+	BranchCode          string     `gorm:"size:20;uniqueIndex;not null" json:"branch_code"`
+	Name                string     `gorm:"size:150;not null" json:"name"`
+	TamilName           string     `gorm:"size:150;not null;default:''" json:"tamil_name"`
+	LicenseNumber       string     `gorm:"size:100;not null;default:''" json:"license_number"`
+	LicenseIssueDate    *time.Time `gorm:"type:date" json:"license_issue_date"`
+	LicenseExpiryDate   *time.Time `gorm:"type:date" json:"license_expiry_date"`
+	RegistrationDetails string     `gorm:"type:text" json:"registration_details"`
+	InchargeName        string     `gorm:"size:150;not null;default:''" json:"incharge_name"`
+	Phone               string     `gorm:"size:20;not null;default:''" json:"phone"`
+	Email               string     `gorm:"size:100;not null;default:''" json:"email"`
+	AddressLine         string     `gorm:"type:text" json:"address_line"`
+	City                string     `gorm:"size:50;not null;default:''" json:"city"`
+	State               string     `gorm:"size:50;not null;default:'Tamil Nadu'" json:"state"`
+	Pincode             string     `gorm:"size:10;not null;default:''" json:"pincode"`
+	UPIID               string     `gorm:"size:100;not null;default:''" json:"upi_id"`
+	QRCodePath          string     `gorm:"size:255;not null;default:''" json:"qr_code_path"`
+	LogoPath            string     `gorm:"size:255;not null;default:''" json:"logo_path"`
+	IsActive            bool       `gorm:"default:true;not null" json:"is_active"`
+	CreatedAt           time.Time  `gorm:"autoCreateTime" json:"created_at"`
+	UpdatedAt           time.Time  `gorm:"autoUpdateTime" json:"updated_at"`
+}
+
 type User struct {
 	ID           uint      `gorm:"primaryKey;autoIncrement" json:"id"`
 	Username     string    `gorm:"size:50;uniqueIndex;not null" json:"username"`
@@ -36,6 +60,8 @@ type User struct {
 	Email        string    `gorm:"size:100;uniqueIndex;not null" json:"email"`
 	PasswordHash string    `gorm:"size:255;not null" json:"-"`
 	Role         Role      `gorm:"type:enum('STAFF','ADMIN');not null;default:'STAFF'" json:"role"`
+	BranchID     *uint     `gorm:"index;default:1" json:"branch_id"`
+	Branch       *Branch   `gorm:"foreignKey:BranchID" json:"branch,omitempty"`
 	IsActive     bool      `gorm:"default:true;not null" json:"is_active"`
 	CreatedAt    time.Time `gorm:"autoCreateTime" json:"created_at"`
 	UpdatedAt    time.Time `gorm:"autoUpdateTime" json:"updated_at"`
@@ -126,6 +152,8 @@ type InstallerOtpRequest struct {
 
 type Donation struct {
 	ID                  uint            `gorm:"primaryKey;autoIncrement" json:"id"`
+	BranchID            uint            `gorm:"not null;default:1;index" json:"branch_id"`
+	Branch              *Branch         `gorm:"foreignKey:BranchID" json:"branch,omitempty"`
 	DonationNumber      string          `gorm:"size:30;uniqueIndex;not null" json:"donation_number"`
 	DonorID             uint            `gorm:"not null;index" json:"donor_id"`
 	Donor               *Donor          `gorm:"foreignKey:DonorID" json:"donor,omitempty"`
@@ -146,9 +174,14 @@ type Donation struct {
 	Notes               string          `gorm:"type:text" json:"notes"`
 	Status                 string          `gorm:"size:20;not null;default:'ACTIVE'" json:"status"`
 	Source                 string          `gorm:"size:20;not null;default:'WEB'" json:"source"` // WEB / MOBILE_APP
+	TrustHome              string          `gorm:"size:50;not null;default:'OLD_AGE_HOME'" json:"trust_home"`
 	PaymentGatewayOrderID  string          `gorm:"size:100;default:''" json:"payment_gateway_order_id"`
 	PaymentGatewayPaymentID string         `gorm:"size:100;default:''" json:"payment_gateway_payment_id"`
-	VerificationStatus     string          `gorm:"size:30;not null;default:'VERIFIED'" json:"verification_status"` // VERIFIED / PENDING / FAILED
+	VerificationStatus     string          `gorm:"size:30;not null;default:'VERIFIED'" json:"verification_status"` // VERIFIED / PENDING / FAILED / REJECTED
+	RejectionReason        string          `gorm:"size:255;default:''" json:"rejection_reason"`
+	VerifiedByID           *uint           `gorm:"index" json:"verified_by_id,omitempty"`
+	VerifiedBy             *User           `gorm:"foreignKey:VerifiedByID" json:"verified_by_user,omitempty"`
+	VerifiedAt             *time.Time      `json:"verified_at,omitempty"`
 	Category               string          `gorm:"size:50;not null;default:'FOOD'" json:"category"`
 	Reason                 string          `gorm:"type:text" json:"reason"`
 	CreatedByID            uint            `gorm:"not null" json:"created_by"`
@@ -158,6 +191,8 @@ type Donation struct {
 
 type CashTransaction struct {
 	ID              uint            `gorm:"primaryKey;autoIncrement" json:"id"`
+	BranchID        uint            `gorm:"not null;default:1;index" json:"branch_id"`
+	Branch          *Branch         `gorm:"foreignKey:BranchID" json:"branch,omitempty"`
 	BusinessDate    time.Time       `gorm:"type:date;not null;index" json:"business_date"`
 	TransactionType string          `gorm:"size:20;not null" json:"transaction_type"` // INFLOW / OUTFLOW
 	Amount          decimal.Decimal `gorm:"type:decimal(15,2);not null" json:"amount"`
@@ -179,6 +214,8 @@ type CashDenomination struct {
 
 type BankAccount struct {
 	ID                  uint            `gorm:"primaryKey;autoIncrement" json:"id"`
+	BranchID            *uint           `gorm:"index" json:"branch_id,omitempty"`
+	TrustBranch         *Branch         `gorm:"foreignKey:BranchID" json:"trust_branch,omitempty"`
 	BankName            string          `gorm:"size:100;not null" json:"bank_name"`
 	AccountName         string          `gorm:"size:100;not null" json:"account_name"`
 	AccountNumberMasked string          `gorm:"size:30;not null" json:"account_number_masked"`
@@ -213,6 +250,8 @@ type BankTransaction struct {
 
 type Expense struct {
 	ID              uint            `gorm:"primaryKey;autoIncrement" json:"id"`
+	BranchID        uint            `gorm:"not null;default:1;index" json:"branch_id"`
+	Branch          *Branch         `gorm:"foreignKey:BranchID" json:"branch,omitempty"`
 	ExpenseNumber   string          `gorm:"size:30;uniqueIndex;not null" json:"expense_number"`
 	BusinessDate    time.Time       `gorm:"type:date;not null;index" json:"business_date"`
 	PaymentMode     PaymentMode     `gorm:"type:enum('CASH','BANK');not null" json:"payment_mode"`
@@ -237,7 +276,9 @@ type Expense struct {
 
 type DailyClosing struct {
 	ID                  uint              `gorm:"primaryKey;autoIncrement" json:"id"`
-	BusinessDate        time.Time         `gorm:"type:date;uniqueIndex;not null" json:"business_date"`
+	BranchID            uint              `gorm:"not null;default:1;index" json:"branch_id"`
+	Branch              *Branch           `gorm:"foreignKey:BranchID" json:"branch,omitempty"`
+	BusinessDate        time.Time         `gorm:"type:date;not null;index" json:"business_date"`
 	Status              BusinessDayStatus `gorm:"type:enum('OPEN','READY_TO_CLOSE','CLOSED','UNLOCKED');not null;default:'OPEN'" json:"status"`
 	OpeningCash         decimal.Decimal   `gorm:"type:decimal(15,2);not null" json:"opening_cash"`
 	CashInflow          decimal.Decimal   `gorm:"type:decimal(15,2);not null;default:0.00" json:"cash_inflow"`
@@ -294,6 +335,8 @@ type VoucherTitle struct {
 
 type Voucher struct {
 	ID                  uint            `gorm:"primaryKey;autoIncrement" json:"id"`
+	BranchID            uint            `gorm:"not null;default:1;index" json:"branch_id"`
+	Branch              *Branch         `gorm:"foreignKey:BranchID" json:"branch,omitempty"`
 	VoucherNumber       string          `gorm:"size:30;uniqueIndex;not null" json:"voucher_number"`
 	VoucherType         string          `gorm:"size:30;not null" json:"voucher_type"` // INCOME, EXPENSE, ASSET, LIABILITY, SELF_TRANSFER, DONATION_RECEIPT, EXPENSE_VOUCHER
 	LedgerID            *uint           `gorm:"index" json:"ledger_id,omitempty"`
@@ -363,3 +406,18 @@ type Sequence struct {
 	Name         string `gorm:"primaryKey;size:30" json:"name"`
 	CurrentValue int64  `gorm:"not null;default:0" json:"current_value"`
 }
+
+type TrustHomeConfig struct {
+	ID            uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	HomeKey       string    `gorm:"size:50;uniqueIndex;not null" json:"home_key"`
+	HomeName      string    `gorm:"size:150;not null" json:"home_name"`
+	HomeNameTamil string    `gorm:"size:150;not null;default:''" json:"home_name_tamil"`
+	UPIID         string    `gorm:"size:100;not null;default:''" json:"upi_id"`
+	QRCodePath    string    `gorm:"size:255;not null;default:''" json:"qr_code_path"`
+	LogoPath      string    `gorm:"size:255;not null;default:''" json:"logo_path"`
+	Description   string    `gorm:"type:text" json:"description"`
+	IsActive      bool      `gorm:"default:true;not null" json:"is_active"`
+	CreatedAt     time.Time `gorm:"autoCreateTime" json:"created_at"`
+	UpdatedAt     time.Time `gorm:"autoUpdateTime" json:"updated_at"`
+}
+

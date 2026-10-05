@@ -58,15 +58,39 @@ func GetOpeningBankBalance(db *gorm.DB, bankAccountID uint, dateStr string, acco
 // ExpectedClosingCash/CashDifference value, which goes stale the moment a new
 // cash transaction is recorded for that date.
 func RecomputeCashFigures(db *gorm.DB, dateStr string, openingCash decimal.Decimal) CashFigures {
-	var inflow decimal.Decimal
-	db.Table("cash_transactions").
-		Where("business_date = ? AND transaction_type = ?", dateStr, "INFLOW").
-		Select("COALESCE(SUM(amount), 0)").Scan(&inflow)
+	return RecomputeBranchCashFigures(db, nil, dateStr, openingCash)
+}
 
+// GetBranchOpeningCash returns the physical cash count from the most recently CLOSED
+// business day strictly before dateStr for the given branch.
+func GetBranchOpeningCash(db *gorm.DB, branchID uint, dateStr string) decimal.Decimal {
+	var prevPhysical decimal.Decimal
+	db.Table("daily_closings").
+		Where("branch_id = ? AND business_date < ? AND status = ?", branchID, dateStr, "CLOSED").
+		Order("business_date DESC").
+		Limit(1).
+		Select("physical_cash_count").
+		Scan(&prevPhysical)
+	return prevPhysical
+}
+
+// RecomputeBranchCashFigures sums cash_transactions for the given branch & business date
+func RecomputeBranchCashFigures(db *gorm.DB, branchID *uint, dateStr string, openingCash decimal.Decimal) CashFigures {
+	inflowQuery := db.Table("cash_transactions").
+		Where("business_date = ? AND transaction_type = ?", dateStr, "INFLOW")
+	if branchID != nil {
+		inflowQuery = inflowQuery.Where("branch_id = ?", *branchID)
+	}
+	var inflow decimal.Decimal
+	inflowQuery.Select("COALESCE(SUM(amount), 0)").Scan(&inflow)
+
+	outflowQuery := db.Table("cash_transactions").
+		Where("business_date = ? AND transaction_type = ?", dateStr, "OUTFLOW")
+	if branchID != nil {
+		outflowQuery = outflowQuery.Where("branch_id = ?", *branchID)
+	}
 	var outflow decimal.Decimal
-	db.Table("cash_transactions").
-		Where("business_date = ? AND transaction_type = ?", dateStr, "OUTFLOW").
-		Select("COALESCE(SUM(amount), 0)").Scan(&outflow)
+	outflowQuery.Select("COALESCE(SUM(amount), 0)").Scan(&outflow)
 
 	return CashFigures{
 		Inflow:          inflow,

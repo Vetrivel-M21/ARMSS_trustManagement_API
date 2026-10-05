@@ -252,7 +252,7 @@ func (h *BankHandler) SetAppDonationAccount(c *gin.Context) {
 	shared.SendSuccess(c, http.StatusOK, account)
 }
 
-// GetAppDonationConfig is a public endpoint returning the active app donation bank account & UPI ID
+// GetAppDonationConfig is a public endpoint returning the active app donation bank account & UPI ID, along with trust homes
 func (h *BankHandler) GetAppDonationConfig(c *gin.Context) {
 	var account models.BankAccount
 	if err := database.DB.Where("is_app_donation_account = ? AND is_active = ?", true, true).First(&account).Error; err != nil {
@@ -274,6 +274,117 @@ func (h *BankHandler) GetAppDonationConfig(c *gin.Context) {
 		}
 	}
 
+	var homes []models.TrustHomeConfig
+	_ = database.DB.Where("is_active = ?", true).Order("id asc").Find(&homes)
+	if len(homes) == 0 {
+		defaultHomes := []models.TrustHomeConfig{
+			{HomeKey: "OLD_AGE_HOME", HomeName: "Old Age Home", HomeNameTamil: "முதியோர்கள் இல்லம்", Description: "Support elderly residents with nutritious food, healthcare, and dignified shelter.", IsActive: true},
+			{HomeKey: "CHILDREN_HOME", HomeName: "Children Home", HomeNameTamil: "குழந்தைகள் இல்லம்", Description: "Empower underprivileged children with education, nutritious meals, and loving care.", IsActive: true},
+			{HomeKey: "ADOPTION_HOME", HomeName: "Children Adoption Home", HomeNameTamil: "சிறப்பு தத்தெடுத்தல் மையம்", Description: "Specialised adoption center offering safety, medical care, and family placement for infants & children.", IsActive: true},
+		}
+		for i := range defaultHomes {
+			_ = database.DB.Create(&defaultHomes[i])
+		}
+		_ = database.DB.Where("is_active = ?", true).Order("id asc").Find(&homes)
+	}
+
+	var branches []models.Branch
+	_ = database.DB.Where("is_active = ?", true).Order("id asc").Find(&branches)
+	branchByCode := make(map[string]models.Branch)
+	for _, b := range branches {
+		branchByCode[strings.ToUpper(b.BranchCode)] = b
+	}
+
+	homeDTOs := make([]dto.TrustHomeDTO, len(homes))
+	homeKeySet := make(map[string]bool)
+	branchToHomeKey := map[string]string{
+		"OAH":  "OLD_AGE_HOME",
+		"CH":   "CHILDREN_HOME",
+		"CAH":  "ADOPTION_HOME",
+		"MAIN": "MAIN",
+	}
+
+	for i, hm := range homes {
+		homeKeySet[hm.HomeKey] = true
+		switch hm.HomeKey {
+		case "OLD_AGE_HOME":
+			homeKeySet["OAH"] = true
+		case "CHILDREN_HOME":
+			homeKeySet["CH"] = true
+		case "ADOPTION_HOME":
+			homeKeySet["CAH"] = true
+		}
+		upi := hm.UPIID
+		if upi == "" {
+			upi = account.UPIID
+		}
+		qr := hm.QRCodePath
+		if qr == "" {
+			qr = account.QRCodePath
+		}
+		logo := hm.LogoPath
+		if logo == "" {
+			code := ""
+			switch hm.HomeKey {
+			case "OLD_AGE_HOME":
+				code = "OAH"
+			case "CHILDREN_HOME":
+				code = "CH"
+			case "ADOPTION_HOME":
+				code = "CAH"
+			}
+			if b, ok := branchByCode[code]; ok && b.LogoPath != "" {
+				logo = b.LogoPath
+			}
+		}
+		homeDTOs[i] = dto.TrustHomeDTO{
+			ID:            hm.ID,
+			HomeKey:       hm.HomeKey,
+			HomeName:      hm.HomeName,
+			HomeNameTamil: hm.HomeNameTamil,
+			UPIID:         upi,
+			QRCodePath:    qr,
+			LogoPath:      logo,
+			Description:   hm.Description,
+			IsActive:      hm.IsActive,
+		}
+	}
+
+	// Also include any custom active branches so newly created branches appear without duplicating default ones
+	for _, b := range branches {
+		mappedKey := b.BranchCode
+		if alias, ok := branchToHomeKey[strings.ToUpper(b.BranchCode)]; ok {
+			mappedKey = alias
+		}
+		if !homeKeySet[b.BranchCode] && !homeKeySet[mappedKey] && b.BranchCode != "MAIN" {
+			homeKeySet[b.BranchCode] = true
+			homeKeySet[mappedKey] = true
+			upi := b.UPIID
+			if upi == "" {
+				upi = account.UPIID
+			}
+			qr := b.QRCodePath
+			if qr == "" {
+				qr = account.QRCodePath
+			}
+			desc := "Nesakkaram " + b.Name
+			if b.City != "" {
+				desc += " (" + b.City + ")"
+			}
+			homeDTOs = append(homeDTOs, dto.TrustHomeDTO{
+				ID:            b.ID + 1000,
+				HomeKey:       b.BranchCode,
+				HomeName:      b.Name,
+				HomeNameTamil: b.TamilName,
+				UPIID:         upi,
+				QRCodePath:    qr,
+				LogoPath:      b.LogoPath,
+				Description:   desc,
+				IsActive:      b.IsActive,
+			})
+		}
+	}
+
 	config := dto.PublicAppDonationConfig{
 		BankAccountID:       account.ID,
 		BankName:            account.BankName,
@@ -285,9 +396,166 @@ func (h *BankHandler) GetAppDonationConfig(c *gin.Context) {
 		QRCodePath:          account.QRCodePath,
 		TrustName:           account.AccountName,
 		RazorpayKeyID:       keyID,
+		Homes:               homeDTOs,
 	}
 	shared.SendSuccess(c, http.StatusOK, config)
 }
+
+// GetTrustHomes returns all configured trust homes
+func (h *BankHandler) GetTrustHomes(c *gin.Context) {
+	var homes []models.TrustHomeConfig
+	if err := database.DB.Order("id asc").Find(&homes).Error; err != nil {
+		shared.SendAppError(c, http.StatusInternalServerError, "Failed to fetch trust homes: "+err.Error())
+		return
+	}
+
+	if len(homes) == 0 {
+		defaultHomes := []models.TrustHomeConfig{
+			{HomeKey: "OLD_AGE_HOME", HomeName: "Old Age Home", HomeNameTamil: "முதியோர்கள் இல்லம்", Description: "Support elderly residents with nutritious food, healthcare, and dignified shelter.", IsActive: true},
+			{HomeKey: "CHILDREN_HOME", HomeName: "Children Home", HomeNameTamil: "குழந்தைகள் இல்லம்", Description: "Empower underprivileged children with education, nutritious meals, and loving care.", IsActive: true},
+			{HomeKey: "ADOPTION_HOME", HomeName: "Children Adoption Home", HomeNameTamil: "சிறப்பு தத்தெடுத்தல் மையம்", Description: "Specialised adoption center offering safety, medical care, and family placement for infants & children.", IsActive: true},
+		}
+		for i := range defaultHomes {
+			_ = database.DB.Create(&defaultHomes[i])
+		}
+		_ = database.DB.Order("id asc").Find(&homes)
+	}
+
+	shared.SendSuccess(c, http.StatusOK, homes)
+}
+
+// CreateTrustHome creates a new trust home / operational wing (Admin only)
+func (h *BankHandler) CreateTrustHome(c *gin.Context) {
+	var req dto.CreateTrustHomeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		shared.SendAppError(c, http.StatusBadRequest, "Invalid request payload: "+err.Error())
+		return
+	}
+
+	key := strings.ToUpper(strings.TrimSpace(req.HomeKey))
+	// Replace spaces/dashes with underscores
+	key = strings.ReplaceAll(key, " ", "_")
+	key = strings.ReplaceAll(key, "-", "_")
+	if key == "" {
+		shared.SendAppError(c, http.StatusBadRequest, "Home Key is required")
+		return
+	}
+
+	name := strings.TrimSpace(req.HomeName)
+	if name == "" {
+		shared.SendAppError(c, http.StatusBadRequest, "Home Name is required")
+		return
+	}
+
+	// Check if already exists
+	var count int64
+	database.DB.Model(&models.TrustHomeConfig{}).Where("home_key = ?", key).Count(&count)
+	if count > 0 {
+		shared.SendAppError(c, http.StatusConflict, fmt.Sprintf("Trust home with key '%s' already exists", key))
+		return
+	}
+
+	isActive := true
+	if req.IsActive != nil {
+		isActive = *req.IsActive
+	}
+
+	home := models.TrustHomeConfig{
+		HomeKey:       key,
+		HomeName:      name,
+		HomeNameTamil: strings.TrimSpace(req.HomeNameTamil),
+		UPIID:         strings.TrimSpace(req.UPIID),
+		QRCodePath:    strings.TrimSpace(req.QRCodePath),
+		LogoPath:      strings.TrimSpace(req.LogoPath),
+		Description:   strings.TrimSpace(req.Description),
+		IsActive:      isActive,
+	}
+
+	if err := database.DB.Create(&home).Error; err != nil {
+		shared.SendAppError(c, http.StatusInternalServerError, "Failed to create trust home: "+err.Error())
+		return
+	}
+
+	shared.SendSuccess(c, http.StatusCreated, home)
+}
+
+// UpdateTrustHome updates the details, UPI ID, QR code, and description for a specific home (Admin only)
+func (h *BankHandler) UpdateTrustHome(c *gin.Context) {
+	key := strings.ToUpper(strings.TrimSpace(c.Param("key")))
+	var home models.TrustHomeConfig
+	if err := database.DB.Where("home_key = ?", key).First(&home).Error; err != nil {
+		shared.SendAppError(c, http.StatusNotFound, "Trust home not found")
+		return
+	}
+
+	var req dto.UpdateTrustHomeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		shared.SendAppError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if strings.TrimSpace(req.HomeName) != "" {
+		home.HomeName = strings.TrimSpace(req.HomeName)
+	}
+	if req.HomeNameTamil != "" {
+		home.HomeNameTamil = strings.TrimSpace(req.HomeNameTamil)
+	}
+	home.UPIID = strings.TrimSpace(req.UPIID)
+	home.QRCodePath = strings.TrimSpace(req.QRCodePath)
+	home.LogoPath = strings.TrimSpace(req.LogoPath)
+	if req.Description != "" {
+		home.Description = strings.TrimSpace(req.Description)
+	}
+	if req.IsActive != nil {
+		home.IsActive = *req.IsActive
+	}
+
+	if err := database.DB.Save(&home).Error; err != nil {
+		shared.SendAppError(c, http.StatusInternalServerError, "Failed to update trust home: "+err.Error())
+		return
+	}
+
+	shared.SendSuccess(c, http.StatusOK, home)
+}
+
+// DeleteTrustHome deletes or deactivates a trust home (Admin only)
+func (h *BankHandler) DeleteTrustHome(c *gin.Context) {
+	key := strings.ToUpper(strings.TrimSpace(c.Param("key")))
+	var home models.TrustHomeConfig
+	if err := database.DB.Where("home_key = ?", key).First(&home).Error; err != nil {
+		shared.SendAppError(c, http.StatusNotFound, "Trust home not found")
+		return
+	}
+
+	// Check if any donations reference this home
+	var donCount int64
+	database.DB.Model(&models.Donation{}).Where("trust_home = ?", key).Count(&donCount)
+	if donCount > 0 {
+		// Soft deactivate to preserve historical donation integrity
+		home.IsActive = false
+		if err := database.DB.Save(&home).Error; err != nil {
+			shared.SendAppError(c, http.StatusInternalServerError, "Failed to deactivate trust home: "+err.Error())
+			return
+		}
+		shared.SendSuccess(c, http.StatusOK, gin.H{
+			"message":     "Trust home has historical donations and was marked as inactive instead of permanent deletion.",
+			"deactivated": true,
+		})
+		return
+	}
+
+	// Permanently remove
+	if err := database.DB.Delete(&home).Error; err != nil {
+		shared.SendAppError(c, http.StatusInternalServerError, "Failed to delete trust home: "+err.Error())
+		return
+	}
+
+	shared.SendSuccess(c, http.StatusOK, gin.H{
+		"message": "Trust home deleted successfully.",
+		"deleted": true,
+	})
+}
+
 
 // BankTransactionDetail is one ledger row enriched with who/why details from
 // its source Donation or Expense — the ledger alone only carries a generic

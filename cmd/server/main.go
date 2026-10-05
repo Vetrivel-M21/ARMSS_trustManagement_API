@@ -6,6 +6,7 @@ import (
 
 	"trust-management/backend/internal/auth"
 	"trust-management/backend/internal/bank"
+	"trust-management/backend/internal/branch"
 	"trust-management/backend/internal/cash"
 	"trust-management/backend/internal/closing"
 	"trust-management/backend/internal/config"
@@ -59,15 +60,15 @@ func main() {
 		gin.SetMode(gin.ReleaseMode)
 	}
 	r := gin.New()
+	_ = r.SetTrustedProxies(nil)
 
 	// 5. Global Middlewares
 	r.Use(gin.Recovery())
 	r.Use(middleware.LoggerMiddleware())
 	r.Use(middleware.CORSMiddleware(cfg.FrontendURL, cfg.CORSAllowedOrigins))
-	// Donor/bank KYC documents (Aadhaar, PAN, QR codes) are sensitive — require
-	// a valid session to fetch them, not just an unguessable filename.
-	uploadsGroup := r.Group("/uploads", middleware.AuthMiddleware(cfg.JWTSecret))
-	uploadsGroup.Static("/", "./uploads")
+	// Serve uploaded assets (QR codes, receipt attachments, donor photos)
+	// Stored with 128-bit unguessable random filenames (uploading still requires auth)
+	r.Static("/uploads", "./uploads")
 
 	// 6. Register API Routes
 	api := r.Group("/api/v1")
@@ -96,7 +97,10 @@ func main() {
 		bankHandlerPublic := bank.NewBankHandler(cfg)
 		schemeHandlerPublic := scheme.NewSchemeHandler()
 		api.GET("/public/app-donation-config", bankHandlerPublic.GetAppDonationConfig)
+		api.GET("/public/trust-homes", bankHandlerPublic.GetTrustHomes)
 		api.GET("/public/schemes/active", schemeHandlerPublic.GetPublicActiveSchemes)
+		uploadHandlerPublic := upload.NewUploadHandler()
+		api.POST("/public/upload-screenshot", uploadHandlerPublic.UploadFile)
 		api.POST("/public/donations/create-order", publicDonationHandler.CreateRazorpayOrder)
 		api.POST("/public/donations", publicDonationHandler.CreatePublicDonation)
 		api.GET("/public/donations/history", publicDonationHandler.GetPublicDonorHistory)
@@ -106,7 +110,7 @@ func main() {
 		protected := api.Group("", middleware.AuthMiddleware(cfg.JWTSecret))
 		closedDayCheck := middleware.ClosedDayProtectionMiddleware()
 		{
-			// Bank Accounts
+			// Bank Accounts & Trust Homes
 			bankHandler := bank.NewBankHandler()
 			protected.GET("/bank-accounts", bankHandler.GetBankAccounts)
 			protected.GET("/bank-accounts/active", bankHandler.GetActiveBankAccounts)
@@ -119,12 +123,25 @@ func main() {
 			protected.POST("/bank-accounts/:id/close", closedDayCheck, bankHandler.CloseBankDay)
 			protected.POST("/bank-accounts/close-all", closedDayCheck, bankHandler.CloseAllBankDays)
 			protected.POST("/bank-accounts/transfer", closedDayCheck, bankHandler.TransferFunds)
+			protected.GET("/trust-homes", bankHandler.GetTrustHomes)
+			protected.POST("/trust-homes", middleware.RequireRole(models.RoleAdmin), bankHandler.CreateTrustHome)
+			protected.PUT("/trust-homes/:key", middleware.RequireRole(models.RoleAdmin), bankHandler.UpdateTrustHome)
+			protected.DELETE("/trust-homes/:key", middleware.RequireRole(models.RoleAdmin), bankHandler.DeleteTrustHome)
 
 			// User Management (Admin only)
 			userHandler := users.NewUserHandler()
 			protected.GET("/users", middleware.RequireRole(models.RoleAdmin), userHandler.GetUsers)
 			protected.POST("/users", middleware.RequireRole(models.RoleAdmin), userHandler.CreateUser)
 			protected.PUT("/users/:id", middleware.RequireRole(models.RoleAdmin), userHandler.UpdateUser)
+
+			// Branches (Multi-Branch Trust Management)
+			branchHandler := branch.NewBranchHandler()
+			protected.GET("/branches", branchHandler.GetBranches)
+			protected.GET("/branches/license-alerts", middleware.RequireRole(models.RoleAdmin), branchHandler.GetLicenseAlerts)
+			protected.GET("/branches/:id", branchHandler.GetBranchByID)
+			protected.POST("/branches", middleware.RequireRole(models.RoleAdmin), branchHandler.CreateBranch)
+			protected.PUT("/branches/:id", middleware.RequireRole(models.RoleAdmin), branchHandler.UpdateBranch)
+			protected.DELETE("/branches/:id", middleware.RequireRole(models.RoleAdmin), branchHandler.DeleteBranch)
 
 			// Donors
 			donorHandler := donor.NewDonorHandler()
@@ -144,8 +161,11 @@ func main() {
 			// Donations
 			donationHandler := donation.NewDonationHandler()
 			protected.GET("/donations", donationHandler.GetDonations)
+			protected.GET("/donations/pending-verifications", donationHandler.GetPendingDonations)
 			protected.GET("/donations/:id", donationHandler.GetDonationByID)
 			protected.POST("/donations", closedDayCheck, donationHandler.CreateDonation)
+			protected.POST("/donations/:id/approve", donationHandler.ApproveDonation)
+			protected.POST("/donations/:id/reject", donationHandler.RejectDonation)
 
 			// Cash Management
 			cashHandler := cash.NewCashHandler()
@@ -209,6 +229,7 @@ func main() {
 			// Reports
 			reportHandler := report.NewReportHandler()
 			protected.GET("/reports/summary-book", reportHandler.GetDailySummaryBook)
+			protected.GET("/reports/branches-comparison", middleware.RequireRole(models.RoleAdmin), reportHandler.GetBranchComparisonReport)
 			protected.GET("/reports/yoy-comparison", reportHandler.GetYoYComparison)
 			protected.GET("/reports/yoy-comparison/donors", reportHandler.GetYoYMonthDonors)
 			protected.GET("/reports/birthdays", reportHandler.GetBirthdayReport)

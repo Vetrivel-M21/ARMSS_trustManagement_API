@@ -180,17 +180,51 @@ type CreateDonationRequest struct {
 }
 
 // --- Public Donor App DTOs ---
+type TrustHomeDTO struct {
+	ID            uint   `json:"id"`
+	HomeKey       string `json:"home_key"`
+	HomeName      string `json:"home_name"`
+	HomeNameTamil string `json:"home_name_tamil"`
+	UPIID         string `json:"upi_id"`
+	QRCodePath    string `json:"qr_code_path"`
+	LogoPath      string `json:"logo_path"`
+	Description   string `json:"description"`
+	IsActive      bool   `json:"is_active"`
+}
+
+type CreateTrustHomeRequest struct {
+	HomeKey       string `json:"home_key" binding:"required"`
+	HomeName      string `json:"home_name" binding:"required"`
+	HomeNameTamil string `json:"home_name_tamil"`
+	UPIID         string `json:"upi_id"`
+	QRCodePath    string `json:"qr_code_path"`
+	LogoPath      string `json:"logo_path"`
+	Description   string `json:"description"`
+	IsActive      *bool  `json:"is_active"`
+}
+
+type UpdateTrustHomeRequest struct {
+	HomeName      string `json:"home_name"`
+	HomeNameTamil string `json:"home_name_tamil"`
+	UPIID         string `json:"upi_id"`
+	QRCodePath    string `json:"qr_code_path"`
+	LogoPath      string `json:"logo_path"`
+	Description   string `json:"description"`
+	IsActive      *bool  `json:"is_active"`
+}
+
 type PublicAppDonationConfig struct {
-	BankAccountID       uint   `json:"bank_account_id"`
-	BankName            string `json:"bank_name"`
-	AccountName         string `json:"account_name"`
-	AccountNumberMasked string `json:"account_number_masked"`
-	IFSCCode            string `json:"ifsc_code"`
-	Branch              string `json:"branch"`
-	UPIID               string `json:"upi_id"`
-	QRCodePath          string `json:"qr_code_path"`
-	TrustName           string `json:"trust_name"`
-	RazorpayKeyID       string `json:"razorpay_key_id,omitempty"`
+	BankAccountID       uint           `json:"bank_account_id"`
+	BankName            string         `json:"bank_name"`
+	AccountName         string         `json:"account_name"`
+	AccountNumberMasked string         `json:"account_number_masked"`
+	IFSCCode            string         `json:"ifsc_code"`
+	Branch              string         `json:"branch"`
+	UPIID               string         `json:"upi_id"`
+	QRCodePath          string         `json:"qr_code_path"`
+	TrustName           string         `json:"trust_name"`
+	RazorpayKeyID       string         `json:"razorpay_key_id,omitempty"`
+	Homes               []TrustHomeDTO `json:"homes,omitempty"`
 }
 
 type CreateRazorpayOrderRequest struct {
@@ -215,6 +249,7 @@ type PublicCreateDonationRequest struct {
 	City                    string          `json:"city"`
 	State                   string          `json:"state"`
 	Pincode                 string          `json:"pincode"`
+	TrustHome               string          `json:"trust_home"` // OLD_AGE_HOME, CHILDREN_HOME, ADOPTION_HOME
 	Category                string          `json:"category" binding:"required"` // FOOD, MEDICINE, EDUCATION, GENERAL, OTHER
 	SchemeID                *uint           `json:"scheme_id"`
 	Amount                  decimal.Decimal `json:"amount" binding:"required"`
@@ -227,6 +262,7 @@ type PublicCreateDonationRequest struct {
 	PaymentGatewayPaymentID string          `json:"payment_gateway_payment_id"`
 	PaymentSignature        string          `json:"payment_signature"`
 	UPIReferenceNumber      string          `json:"upi_reference_number"`
+	AttachmentPath          string          `json:"attachment_path"`
 }
 
 type PublicDonationItem struct {
@@ -241,6 +277,7 @@ type PublicDonationItem struct {
 	VerificationStatus      string          `json:"verification_status"`
 	PaymentGatewayPaymentID string          `json:"payment_gateway_payment_id"`
 	UPIReferenceNumber      string          `json:"upi_reference_number"`
+	AttachmentPath          string          `json:"attachment_path,omitempty"`
 	CreatedAt               time.Time       `json:"created_at"`
 }
 

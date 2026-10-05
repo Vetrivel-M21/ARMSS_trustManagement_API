@@ -29,18 +29,30 @@ func (h *CashHandler) GetDailyCashSummary(c *gin.Context) {
 		return
 	}
 
-	var inflows decimal.Decimal
-	database.DB.Model(&models.CashTransaction{}).
-		Where("business_date = ? AND transaction_type = ?", dateStr, "INFLOW").
-		Select("COALESCE(SUM(amount), 0)").Scan(&inflows)
+	targetBranchID := shared.ResolveBranchID(c)
 
+	inflowQuery := database.DB.Model(&models.CashTransaction{}).
+		Where("business_date = ? AND transaction_type = ?", dateStr, "INFLOW")
+	if targetBranchID != nil {
+		inflowQuery = inflowQuery.Where("branch_id = ?", *targetBranchID)
+	}
+	var inflows decimal.Decimal
+	inflowQuery.Select("COALESCE(SUM(amount), 0)").Scan(&inflows)
+
+	outflowQuery := database.DB.Model(&models.CashTransaction{}).
+		Where("business_date = ? AND transaction_type = ?", dateStr, "OUTFLOW")
+	if targetBranchID != nil {
+		outflowQuery = outflowQuery.Where("branch_id = ?", *targetBranchID)
+	}
 	var outflows decimal.Decimal
-	database.DB.Model(&models.CashTransaction{}).
-		Where("business_date = ? AND transaction_type = ?", dateStr, "OUTFLOW").
-		Select("COALESCE(SUM(amount), 0)").Scan(&outflows)
+	outflowQuery.Select("COALESCE(SUM(amount), 0)").Scan(&outflows)
 
 	var dailyClosing models.DailyClosing
-	err = database.DB.Where("business_date = ?", dateStr).First(&dailyClosing).Error
+	closingQuery := database.DB.Where("business_date = ?", dateStr)
+	if targetBranchID != nil {
+		closingQuery = closingQuery.Where("branch_id = ?", *targetBranchID)
+	}
+	err = closingQuery.First(&dailyClosing).Error
 	openingCash := decimal.Zero
 	status := "OPEN"
 
@@ -73,9 +85,12 @@ func (h *CashHandler) GetDailyCashSummary(c *gin.Context) {
 	}
 
 	var cashDonations []models.Donation
-	database.DB.Preload("Donor").Preload("Scheme").
-		Where("business_date = ? AND payment_mode = ?", dateStr, "CASH").
-		Find(&cashDonations)
+	donQuery := database.DB.Preload("Donor").Preload("Scheme").
+		Where("business_date = ? AND payment_mode = ?", dateStr, "CASH")
+	if targetBranchID != nil {
+		donQuery = donQuery.Where("branch_id = ?", *targetBranchID)
+	}
+	donQuery.Find(&cashDonations)
 
 	groupMap := make(map[string]*AggregatedCashGroup)
 	for _, don := range cashDonations {
@@ -157,7 +172,11 @@ func (h *CashHandler) GetDailyCashSummary(c *gin.Context) {
 	}
 
 	var cashExpenses []models.Expense
-	database.DB.Where("business_date = ? AND payment_mode = ?", dateStr, "CASH").Find(&cashExpenses)
+	expQuery := database.DB.Where("business_date = ? AND payment_mode = ?", dateStr, "CASH")
+	if targetBranchID != nil {
+		expQuery = expQuery.Where("branch_id = ?", *targetBranchID)
+	}
+	expQuery.Find(&cashExpenses)
 
 	expenseGroupMap := make(map[string]*AggregatedExpenseGroup)
 	for _, exp := range cashExpenses {
@@ -177,9 +196,12 @@ func (h *CashHandler) GetDailyCashSummary(c *gin.Context) {
 
 	// Also aggregate approved cash vouchers (EXPENSE and ASSET)
 	var cashVouchers []models.Voucher
-	database.DB.Preload("Ledger").Preload("Title").
-		Where("business_date = ? AND payment_mode = ? AND status IN ('APPROVED', 'ISSUED') AND voucher_type IN ('EXPENSE', 'ASSET')", dateStr, "CASH").
-		Find(&cashVouchers)
+	vchQuery := database.DB.Preload("Ledger").Preload("Title").
+		Where("business_date = ? AND payment_mode = ? AND status IN ('APPROVED', 'ISSUED') AND voucher_type IN ('EXPENSE', 'ASSET')", dateStr, "CASH")
+	if targetBranchID != nil {
+		vchQuery = vchQuery.Where("branch_id = ?", *targetBranchID)
+	}
+	vchQuery.Find(&cashVouchers)
 
 	for _, v := range cashVouchers {
 		cat := "General Expense"
@@ -258,17 +280,23 @@ func (h *CashHandler) SubmitCashDenominations(c *gin.Context) {
 		return
 	}
 
+	targetBranchID := uint(1)
+	if resolved := shared.ResolveBranchID(c); resolved != nil {
+		targetBranchID = *resolved
+	}
+
 	var dailyClosing models.DailyClosing
-	err = database.DB.Where("business_date = ?", dateStr).First(&dailyClosing).Error
+	err = database.DB.Where("business_date = ? AND branch_id = ?", dateStr, targetBranchID).First(&dailyClosing).Error
 
 	tx := database.DB.Begin()
 	if err != nil {
-		// Create initial daily closing record for the REQUESTED business date.
+		// Create initial daily closing record for the REQUESTED business date & branch.
 		// Opening cash carries forward from the previous CLOSED day's physical count.
 		dailyClosing = models.DailyClosing{
+			BranchID:            targetBranchID,
 			BusinessDate:        bizDate,
 			Status:              models.DayStatusOpen,
-			OpeningCash:         shared.GetOpeningCash(tx, dateStr),
+			OpeningCash:         shared.GetBranchOpeningCash(tx, targetBranchID, dateStr),
 			ExpectedClosingCash: decimal.Zero,
 		}
 		if err := tx.Create(&dailyClosing).Error; err != nil {
@@ -301,10 +329,10 @@ func (h *CashHandler) SubmitCashDenominations(c *gin.Context) {
 		}
 	}
 
-	// Recompute expected closing cash from current transactions — never trust a
+	// Recompute expected closing cash from current transactions for this branch — never trust a
 	// previously persisted value, which goes stale as soon as a new cash
 	// transaction is recorded for this date.
-	figures := shared.RecomputeCashFigures(tx, dateStr, dailyClosing.OpeningCash)
+	figures := shared.RecomputeBranchCashFigures(tx, &targetBranchID, dateStr, dailyClosing.OpeningCash)
 	dailyClosing.CashInflow = figures.Inflow
 	dailyClosing.CashOutflow = figures.Outflow
 	dailyClosing.ExpectedClosingCash = figures.ExpectedClosing

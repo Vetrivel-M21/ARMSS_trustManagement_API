@@ -25,7 +25,7 @@ func NewUserHandler() *UserHandler {
 // see models.User's `json:"-"` tag on PasswordHash).
 func (h *UserHandler) GetUsers(c *gin.Context) {
 	var list []models.User
-	if err := database.DB.Order("id asc").Find(&list).Error; err != nil {
+	if err := database.DB.Preload("Branch").Order("id asc").Find(&list).Error; err != nil {
 		shared.SendAppError(c, http.StatusInternalServerError, "Failed to fetch users")
 		return
 	}
@@ -52,12 +52,19 @@ func (h *UserHandler) CreateUser(c *gin.Context) {
 		return
 	}
 
+	branchID := req.BranchID
+	if branchID == nil || *branchID == 0 {
+		defaultB := uint(1)
+		branchID = &defaultB
+	}
+
 	user := models.User{
 		Username:     req.Username,
 		FullName:     req.FullName,
 		Email:        req.Email,
 		PasswordHash: string(hash),
 		Role:         role,
+		BranchID:     branchID,
 		IsActive:     true,
 	}
 
@@ -132,6 +139,9 @@ func (h *UserHandler) UpdateUser(c *gin.Context) {
 	}
 	if req.IsActive != nil {
 		user.IsActive = *req.IsActive
+	}
+	if req.BranchID != nil {
+		user.BranchID = req.BranchID
 	}
 	if req.Password != nil && *req.Password != "" {
 		if len(*req.Password) < 8 {

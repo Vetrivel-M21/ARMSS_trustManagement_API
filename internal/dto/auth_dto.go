@@ -11,9 +11,12 @@ type LoginResponse struct {
 }
 
 type UserSummary struct {
-	ID       uint   `json:"id"`
-	Username string `json:"username"`
-	FullName string `json:"full_name"`
-	Email    string `json:"email"`
-	Role     string `json:"role"`
+	ID         uint   `json:"id"`
+	Username   string `json:"username"`
+	FullName   string `json:"full_name"`
+	Email      string `json:"email"`
+	Role       string `json:"role"`
+	BranchID   *uint  `json:"branch_id"`
+	BranchCode string `json:"branch_code,omitempty"`
+	BranchName string `json:"branch_name,omitempty"`
 }
