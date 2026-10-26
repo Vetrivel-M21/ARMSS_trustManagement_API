@@ -128,13 +128,34 @@ func (h *UserHandler) CreateUser(c *gin.Context) {
 	// Auto-generate staff code if not provided
 	staffCode := strings.TrimSpace(req.StaffCode)
 	if staffCode == "" {
-		seq, err := shared.NextSequenceAutoSeed(tx, "STAFF")
-		if err != nil {
+		var maxNum int64
+		_ = tx.Raw("SELECT COALESCE(MAX(CAST(SUBSTRING(staff_code, 5) AS UNSIGNED)), 0) FROM users WHERE staff_code LIKE 'STF-%'").Scan(&maxNum)
+
+		nextNum := maxNum + 1
+		for {
+			candidate := fmt.Sprintf("STF-%04d", nextNum)
+			var exists int64
+			tx.Model(&models.User{}).Where("staff_code = ?", candidate).Count(&exists)
+			if exists == 0 {
+				staffCode = candidate
+				break
+			}
+			nextNum++
+		}
+
+		// Keep sequences table aligned
+		_ = tx.Exec(
+			"INSERT INTO sequences (name, current_value) VALUES ('STAFF', ?) ON DUPLICATE KEY UPDATE current_value = GREATEST(current_value, ?)",
+			nextNum, nextNum,
+		)
+	} else {
+		var exists int64
+		database.DB.Model(&models.User{}).Where("staff_code = ?", staffCode).Count(&exists)
+		if exists > 0 {
 			tx.Rollback()
-			shared.SendAppError(c, http.StatusInternalServerError, "Failed to generate staff code")
+			shared.SendAppError(c, http.StatusConflict, fmt.Sprintf("Staff code '%s' is already in use by another staff member", staffCode))
 			return
 		}
-		staffCode = fmt.Sprintf("STF-%04d", seq)
 	}
 
 	var dob *time.Time
