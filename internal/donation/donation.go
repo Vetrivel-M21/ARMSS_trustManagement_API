@@ -32,6 +32,16 @@ func (h *DonationHandler) GetDonations(c *gin.Context) {
 		query = query.Where("donations.branch_id = ?", *targetBranchID)
 	}
 
+	if source := c.Query("source"); source != "" {
+		if strings.ToUpper(source) == "MOBILE_APP" {
+			query = query.Where("donations.source = ?", "MOBILE_APP")
+		} else if strings.ToUpper(source) == "OFFICE" {
+			query = query.Where("donations.source != ? OR donations.source IS NULL", "MOBILE_APP")
+		} else {
+			query = query.Where("donations.source = ?", source)
+		}
+	}
+
 	if paymentMode := c.Query("payment_mode"); paymentMode != "" {
 		query = query.Where("payment_mode = ?", paymentMode)
 	}

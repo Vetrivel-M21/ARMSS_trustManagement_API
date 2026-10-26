@@ -144,31 +144,52 @@ func (h *SchemeHandler) CreateSchemesBulk(c *gin.Context) {
 	tx := database.DB.Begin()
 	created := make([]models.Scheme, 0, len(priced))
 	for _, cell := range priced {
-		scheme := models.Scheme{
-			Name:          schemeCellName(cell.FoodType, cell.MealType),
-			Category:      "FOOD",
-			FoodType:      cell.FoodType,
-			MealType:      cell.MealType,
-			DefaultAmount: cell.DefaultAmount,
-			Description:   req.Description,
-			IsActive:      true,
+		var existing models.Scheme
+		name := schemeCellName(cell.FoodType, cell.MealType)
+		// Check if a FOOD scheme for this FoodType and MealType already exists
+		err := tx.Where("category = ? AND food_type = ? AND meal_type = ?", "FOOD", cell.FoodType, cell.MealType).First(&existing).Error
+		if err == nil {
+			// Update existing scheme (upsert) to prevent duplicates
+			existing.DefaultAmount = cell.DefaultAmount
+			existing.Name = name
+			if req.Description != "" {
+				existing.Description = req.Description
+			}
+			existing.IsActive = true
+			if err := tx.Save(&existing).Error; err != nil {
+				tx.Rollback()
+				shared.SendAppError(c, http.StatusInternalServerError, "Failed to update scheme: "+err.Error())
+				return
+			}
+			created = append(created, existing)
+		} else {
+			// Insert initial scheme
+			scheme := models.Scheme{
+				Name:          name,
+				Category:      "FOOD",
+				FoodType:      cell.FoodType,
+				MealType:      cell.MealType,
+				DefaultAmount: cell.DefaultAmount,
+				Description:   req.Description,
+				IsActive:      true,
+			}
+			if err := tx.Create(&scheme).Error; err != nil {
+				tx.Rollback()
+				shared.SendAppError(c, http.StatusInternalServerError, "Failed to create scheme: "+err.Error())
+				return
+			}
+			created = append(created, scheme)
 		}
-		if err := tx.Create(&scheme).Error; err != nil {
-			tx.Rollback()
-			shared.SendAppError(c, http.StatusInternalServerError, "Failed to create scheme: "+err.Error())
-			return
-		}
-		created = append(created, scheme)
 	}
 
 	audit := models.AuditLog{
 		UserID:     &userID,
-		Action:     "SCHEME_BULK_CREATED",
+		Action:     "SCHEME_BULK_UPSERTED",
 		EntityName: "Scheme",
 		EntityID:   created[0].ID,
 		BeforeData: shared.JSONOrNull(nil),
 		AfterData:  shared.JSONOrNull(created),
-		Reason:     fmt.Sprintf("Created %d scheme(s) via matrix dialog", len(created)),
+		Reason:     fmt.Sprintf("Saved/updated %d food scheme(s) via matrix dialog", len(created)),
 		IPAddress:  c.ClientIP(),
 	}
 	if err := tx.Create(&audit).Error; err != nil {

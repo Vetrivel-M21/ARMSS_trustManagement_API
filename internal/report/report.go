@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"trust-management/backend/internal/database"
@@ -351,3 +352,260 @@ func (h *ReportHandler) GetBirthdayReport(c *gin.Context) {
 		"birthdays": items,
 	})
 }
+
+// GetStaffAnalyticsReport aggregates demographic, attendance, operational throughput, and permissions for a staff member
+func (h *ReportHandler) GetStaffAnalyticsReport(c *gin.Context) {
+	idStr := c.Param("id")
+	staffID, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		shared.SendAppError(c, http.StatusBadRequest, "Invalid staff ID")
+		return
+	}
+
+	var user models.User
+	if err := database.DB.Preload("Branch").Preload("Permissions").First(&user, uint(staffID)).Error; err != nil {
+		shared.SendAppError(c, http.StatusNotFound, "Staff member not found")
+		return
+	}
+
+	// Calculate formatted tenure
+	tenureFormatted := "N/A"
+	if user.DateOfJoining != nil {
+		endDate := time.Now()
+		if user.DateOfRelieving != nil {
+			endDate = *user.DateOfRelieving
+		}
+		years := endDate.Year() - user.DateOfJoining.Year()
+		months := int(endDate.Month()) - int(user.DateOfJoining.Month())
+		if months < 0 {
+			years--
+			months += 12
+		}
+		if years > 0 {
+			tenureFormatted = fmt.Sprintf("%d year%s, %d month%s", years, plural(years), months, plural(months))
+		} else if months > 0 {
+			tenureFormatted = fmt.Sprintf("%d month%s", months, plural(months))
+		} else {
+			tenureFormatted = "Less than a month"
+		}
+	}
+
+	dobStr := ""
+	if user.DateOfBirth != nil {
+		dobStr = user.DateOfBirth.Format("2006-01-02")
+	}
+	dojStr := ""
+	if user.DateOfJoining != nil {
+		dojStr = user.DateOfJoining.Format("2006-01-02")
+	}
+	dorStr := ""
+	if user.DateOfRelieving != nil {
+		dorStr = user.DateOfRelieving.Format("2006-01-02")
+	}
+
+	branchID := uint(1)
+	branchName := "Main Branch"
+	if user.Branch != nil {
+		branchID = user.Branch.ID
+		branchName = user.Branch.Name
+	} else if user.BranchID != nil {
+		branchID = *user.BranchID
+	}
+
+	profileDetail := dto.StaffProfileDetail{
+		ID:                    user.ID,
+		StaffCode:             user.StaffCode,
+		Username:              user.Username,
+		FullName:              user.FullName,
+		Email:                 user.Email,
+		Phone:                 user.Phone,
+		Gender:                user.Gender,
+		Education:             user.Education,
+		MaritalStatus:         user.MaritalStatus,
+		DateOfBirth:           dobStr,
+		DateOfJoining:         dojStr,
+		DateOfRelieving:       dorStr,
+		TenureFormatted:       tenureFormatted,
+		Designation:           user.Designation,
+		Department:            user.Department,
+		AddressLine:           user.AddressLine,
+		City:                  user.City,
+		State:                 user.State,
+		Pincode:               user.Pincode,
+		PhotoPath:             user.PhotoPath,
+		EmergencyContactName:  user.EmergencyContactName,
+		EmergencyContactPhone: user.EmergencyContactPhone,
+		Role:                  string(user.Role),
+		EmploymentStatus:      string(user.EmploymentStatus),
+		StatusRemarks:         user.StatusRemarks,
+		BranchID:              branchID,
+		BranchName:            branchName,
+		IsActive:              user.IsActive,
+	}
+
+	// 2. Attendance Summary for Date Range or Year & Month
+	bizDate := shared.GetCurrentBusinessDate()
+	targetYear := bizDate.Year()
+	targetMonth := int(bizDate.Month())
+
+	if y, err := strconv.Atoi(c.Query("year")); err == nil && y > 2000 {
+		targetYear = y
+	}
+	if m, err := strconv.Atoi(c.Query("month")); err == nil && m >= 1 && m <= 12 {
+		targetMonth = m
+	}
+
+	startParam := strings.TrimSpace(c.Query("start_date"))
+	endParam := strings.TrimSpace(c.Query("end_date"))
+
+	startDate := ""
+	endDate := ""
+	if startParam != "" && endParam != "" {
+		startDate = startParam
+		endDate = endParam
+		if parsedStart, err := time.Parse("2006-01-02", startDate); err == nil {
+			targetYear = parsedStart.Year()
+			targetMonth = int(parsedStart.Month())
+		}
+	} else {
+		startDate = fmt.Sprintf("%04d-%02d-01", targetYear, targetMonth)
+		nextMonth := time.Date(targetYear, time.Month(targetMonth)+1, 1, 0, 0, 0, 0, time.UTC)
+		endDate = nextMonth.AddDate(0, 0, -1).Format("2006-01-02")
+	}
+
+	var attendanceRecords []models.StaffAttendance
+	database.DB.Preload("MarkedByUser").
+		Where("user_id = ? AND business_date >= ? AND business_date <= ?", user.ID, startDate, endDate).
+		Order("business_date desc").
+		Find(&attendanceRecords)
+
+	fullDay := 0
+	half1 := 0
+	half2 := 0
+	absent := 0
+	leave := 0
+	historyItems := make([]dto.StaffAttendanceHistoryItem, 0, len(attendanceRecords))
+
+	for _, r := range attendanceRecords {
+		markedByName := "Admin"
+		if r.MarkedByUser != nil {
+			markedByName = r.MarkedByUser.FullName
+		}
+		switch r.Status {
+		case models.AttendanceStatusFullDay:
+			fullDay++
+		case models.AttendanceStatusFirstHalf:
+			half1++
+		case models.AttendanceStatusSecondHalf:
+			half2++
+		case models.AttendanceStatusAbsent:
+			absent++
+		case models.AttendanceStatusLeave:
+			leave++
+		}
+		historyItems = append(historyItems, dto.StaffAttendanceHistoryItem{
+			ID:           r.ID,
+			BusinessDate: r.BusinessDate.Format("2006-01-02"),
+			Status:       string(r.Status),
+			Remarks:      r.Remarks,
+			MarkedByName: markedByName,
+			CreatedAt:    r.CreatedAt.Format("2006-01-02 15:04:05"),
+		})
+	}
+
+	totalMarked := len(attendanceRecords)
+	var attRate float64 = 0
+	if totalMarked > 0 {
+		presentWeight := float64(fullDay) + (float64(half1+half2) * 0.5)
+		attRate = (presentWeight / float64(totalMarked)) * 100
+	}
+
+	monthNames := []string{
+		"", "January", "February", "March", "April", "May", "June",
+		"July", "August", "September", "October", "November", "December",
+	}
+
+	attSummary := dto.StaffAttendanceMonthSummary{
+		Year:                 targetYear,
+		Month:                targetMonth,
+		MonthName:            monthNames[targetMonth],
+		StartDate:            startDate,
+		EndDate:              endDate,
+		TotalBusinessDays:    totalMarked,
+		FullDayCount:         fullDay,
+		FirstHalfCount:       half1,
+		SecondHalfCount:      half2,
+		LeaveCount:           leave,
+		AbsentCount:          absent,
+		AttendancePercentage: attRate,
+		History:              historyItems,
+	}
+
+	// 3. Operational Activity
+	var vCreatedCount int64
+	var vCreatedTotal decimal.Decimal
+	database.DB.Model(&models.Voucher{}).Where("created_by_id = ?", user.ID).Count(&vCreatedCount)
+	database.DB.Model(&models.Voucher{}).Where("created_by_id = ?", user.ID).Select("COALESCE(SUM(amount), 0)").Scan(&vCreatedTotal)
+
+	var vApprovedCount int64
+	var vApprovedTotal decimal.Decimal
+	database.DB.Model(&models.Voucher{}).Where("approved_by_id = ?", user.ID).Count(&vApprovedCount)
+	database.DB.Model(&models.Voucher{}).Where("approved_by_id = ?", user.ID).Select("COALESCE(SUM(amount), 0)").Scan(&vApprovedTotal)
+
+	var eCreatedCount int64
+	var eCreatedTotal decimal.Decimal
+	database.DB.Model(&models.Expense{}).Where("created_by_id = ?", user.ID).Count(&eCreatedCount)
+	database.DB.Model(&models.Expense{}).Where("created_by_id = ?", user.ID).Select("COALESCE(SUM(amount), 0)").Scan(&eCreatedTotal)
+
+	var eApprovedCount int64
+	var eApprovedTotal decimal.Decimal
+	database.DB.Model(&models.Expense{}).Where("approved_by_id = ?", user.ID).Count(&eApprovedCount)
+	database.DB.Model(&models.Expense{}).Where("approved_by_id = ?", user.ID).Select("COALESCE(SUM(amount), 0)").Scan(&eApprovedTotal)
+
+	var dCount int64
+	var dTotal decimal.Decimal
+	database.DB.Model(&models.Donation{}).Where("created_by_id = ?", user.ID).Count(&dCount)
+	database.DB.Model(&models.Donation{}).Where("created_by_id = ?", user.ID).Select("COALESCE(SUM(amount), 0)").Scan(&dTotal)
+
+	operational := dto.StaffOperationalActivity{
+		VouchersCreatedCount:        vCreatedCount,
+		VouchersCreatedTotalAmount:  vCreatedTotal.StringFixed(2),
+		VouchersApprovedCount:       vApprovedCount,
+		VouchersApprovedTotalAmount: vApprovedTotal.StringFixed(2),
+		ExpensesCreatedCount:        eCreatedCount,
+		ExpensesCreatedTotalAmount:  eCreatedTotal.StringFixed(2),
+		ExpensesApprovedCount:       eApprovedCount,
+		ExpensesApprovedTotalAmount: eApprovedTotal.StringFixed(2),
+		DonationsCollectedCount:     dCount,
+		DonationsCollectedAmount:    dTotal.StringFixed(2),
+	}
+
+	// 4. Permissions
+	perms := make([]string, 0)
+	if user.Role == models.RoleAdmin {
+		var allPerms []models.Permission
+		database.DB.Select("code").Find(&allPerms)
+		for _, p := range allPerms {
+			perms = append(perms, p.Code)
+		}
+	} else {
+		for _, p := range user.Permissions {
+			perms = append(perms, p.Code)
+		}
+	}
+
+	shared.SendSuccess(c, http.StatusOK, dto.StaffAnalyticsReportResponse{
+		Profile:             profileDetail,
+		AttendanceSummary:   attSummary,
+		OperationalActivity: operational,
+		Permissions:         perms,
+	})
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+

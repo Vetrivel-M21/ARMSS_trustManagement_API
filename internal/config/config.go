@@ -31,6 +31,9 @@ type Config struct {
 	InstallerAPISecret  string
 	RazorpayKeyID       string
 	RazorpayKeySecret   string
+	CashfreeAppID       string
+	CashfreeSecretKey   string
+	CashfreeEnv         string
 }
 
 func LoadConfig() (*Config, error) {
@@ -58,6 +61,9 @@ func LoadConfig() (*Config, error) {
 		InstallerAPISecret:  getEnv("INSTALLER_API_SECRET", ""),
 		RazorpayKeyID:       getEnvAny([]string{"razerpay_apikey", "RAZERPAY_APIKEY", "RAZORPAY_KEY_ID", "RAZORPAY_API_KEY", "rzp_key_id"}, ""),
 		RazorpayKeySecret:   getEnvAny([]string{"razerpay_secret", "RAZERPAY_SECRET", "RAZORPAY_KEY_SECRET", "RAZORPAY_API_SECRET", "rzp_key_secret"}, ""),
+		CashfreeAppID:       getEnvAny([]string{"CASHFREE_APP_ID", "CASHFREE_CLIENT_ID", "cf_app_id", "app_id"}, ""),
+		CashfreeSecretKey:   getEnvAny([]string{"CASHFREE_SECRET_KEY", "cf_secret_key", "secret_key"}, ""),
+		CashfreeEnv:         getEnvAny([]string{"CASHFREE_ENV", "cf_env"}, "production"),
 	}
 
 	// Secrets must never have a hardcoded fallback in source — fail fast instead.

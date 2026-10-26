@@ -385,6 +385,16 @@ func (h *BankHandler) GetAppDonationConfig(c *gin.Context) {
 		}
 	}
 
+	cfAppID := ""
+	cfEnv := "production"
+	if h.cfg != nil {
+		cfAppID = h.cfg.CashfreeAppID
+		cfEnv = h.cfg.CashfreeEnv
+	}
+	if cfAppID == "" {
+		cfAppID = "1480588d04bf65afd46ca7ec3cd8850841"
+	}
+
 	config := dto.PublicAppDonationConfig{
 		BankAccountID:       account.ID,
 		BankName:            account.BankName,
@@ -396,6 +406,8 @@ func (h *BankHandler) GetAppDonationConfig(c *gin.Context) {
 		QRCodePath:          account.QRCodePath,
 		TrustName:           account.AccountName,
 		RazorpayKeyID:       keyID,
+		CashfreeAppID:       cfAppID,
+		CashfreeEnv:         cfEnv,
 		Homes:               homeDTOs,
 	}
 	shared.SendSuccess(c, http.StatusOK, config)

@@ -224,6 +224,8 @@ type PublicAppDonationConfig struct {
 	QRCodePath          string         `json:"qr_code_path"`
 	TrustName           string         `json:"trust_name"`
 	RazorpayKeyID       string         `json:"razorpay_key_id,omitempty"`
+	CashfreeAppID       string         `json:"cashfree_app_id,omitempty"`
+	CashfreeEnv         string         `json:"cashfree_env,omitempty"`
 	Homes               []TrustHomeDTO `json:"homes,omitempty"`
 }
 
@@ -238,6 +240,50 @@ type RazorpayOrderResponse struct {
 	Amount          int64  `json:"amount"` // in paise
 	Currency        string `json:"currency"`
 	KeyID           string `json:"key_id"`
+}
+
+type CreateGatewayOrderRequest struct {
+	Amount      string `json:"amount" binding:"required"`
+	DonorName   string `json:"donor_name"`
+	Phone       string `json:"phone"`
+	Email       string `json:"email"`
+	GatewayType string `json:"gateway_type"` // CASHFREE or RAZORPAY
+}
+
+type GatewayOrderResponse struct {
+	GatewayType      string `json:"gateway_type"` // CASHFREE / RAZORPAY
+	OrderID          string `json:"order_id"`
+	PaymentSessionID string `json:"payment_session_id,omitempty"`
+	CheckoutURL      string `json:"checkout_url,omitempty"`
+	Amount           string `json:"amount"`
+	Currency         string `json:"currency"`
+	AppID            string `json:"app_id,omitempty"`
+	KeyID            string `json:"key_id,omitempty"`
+	Environment      string `json:"environment"`
+}
+
+type VerifyAndIssueGatewayDonationRequest struct {
+	GatewayType         string          `json:"gateway_type"` // CASHFREE / RAZORPAY
+	GatewayName         string          `json:"gateway_name"` // Alias for gateway_type
+	OrderID             string          `json:"order_id"`
+	PaymentID           string          `json:"payment_id"`
+	FullName            string          `json:"full_name" binding:"required"`
+	Phone               string          `json:"phone" binding:"required"`
+	Email               string          `json:"email"`
+	PANNumber           string          `json:"pan_number"`
+	AddressLine         string          `json:"address_line"`
+	City                string          `json:"city"`
+	State               string          `json:"state"`
+	Pincode             string          `json:"pincode"`
+	TrustHome           string          `json:"trust_home"`
+	Category            string          `json:"category"`
+	SchemeID            *uint           `json:"scheme_id"`
+	Amount              decimal.Decimal `json:"amount"`
+	Reason              string          `json:"reason"`
+	EventType           string          `json:"event_type"`
+	EventPersonName     string          `json:"event_person_name"`
+	EventDate           string          `json:"event_date"`
+	RelationshipToDonor string          `json:"relationship_to_donor"`
 }
 
 type PublicCreateDonationRequest struct {

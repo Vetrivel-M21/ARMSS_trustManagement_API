@@ -53,18 +53,72 @@ type Branch struct {
 	UpdatedAt           time.Time  `gorm:"autoUpdateTime" json:"updated_at"`
 }
 
+type EmploymentStatus string
+
+const (
+	EmploymentStatusActive             EmploymentStatus = "ACTIVE"
+	EmploymentStatusRelieved           EmploymentStatus = "RELIEVED"
+	EmploymentStatusTemporarilyBlocked EmploymentStatus = "TEMPORARILY_BLOCKED"
+)
+
+type AttendanceStatus string
+
+const (
+	AttendanceStatusFullDay    AttendanceStatus = "FULL_DAY"
+	AttendanceStatusFirstHalf  AttendanceStatus = "FIRST_HALF"
+	AttendanceStatusSecondHalf AttendanceStatus = "SECOND_HALF"
+	AttendanceStatusAbsent     AttendanceStatus = "ABSENT"
+	AttendanceStatusLeave      AttendanceStatus = "LEAVE"
+)
+
 type User struct {
-	ID           uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	Username     string    `gorm:"size:50;uniqueIndex;not null" json:"username"`
-	FullName     string    `gorm:"size:100;not null" json:"full_name"`
-	Email        string    `gorm:"size:100;uniqueIndex;not null" json:"email"`
-	PasswordHash string    `gorm:"size:255;not null" json:"-"`
-	Role         Role      `gorm:"type:enum('STAFF','ADMIN');not null;default:'STAFF'" json:"role"`
-	BranchID     *uint     `gorm:"index;default:1" json:"branch_id"`
-	Branch       *Branch   `gorm:"foreignKey:BranchID" json:"branch,omitempty"`
-	IsActive     bool      `gorm:"default:true;not null" json:"is_active"`
-	CreatedAt    time.Time `gorm:"autoCreateTime" json:"created_at"`
-	UpdatedAt    time.Time `gorm:"autoUpdateTime" json:"updated_at"`
+	ID                    uint             `gorm:"primaryKey;autoIncrement" json:"id"`
+	StaffCode             string           `gorm:"size:30;uniqueIndex" json:"staff_code"`
+	Username              string           `gorm:"size:50;uniqueIndex;not null" json:"username"`
+	FullName              string           `gorm:"size:100;not null" json:"full_name"`
+	Email                 string           `gorm:"size:100;uniqueIndex;not null" json:"email"`
+	Phone                 string           `gorm:"size:20;not null;default:''" json:"phone"`
+	Gender                string           `gorm:"size:10;not null;default:'OTHER'" json:"gender"`
+	Education             string           `gorm:"size:150;not null;default:''" json:"education"`
+	MaritalStatus         string           `gorm:"size:20;not null;default:'SINGLE'" json:"marital_status"`
+	DateOfBirth           *time.Time       `gorm:"type:date" json:"date_of_birth"`
+	DateOfJoining         *time.Time       `gorm:"type:date" json:"date_of_joining"`
+	DateOfRelieving       *time.Time       `gorm:"type:date" json:"date_of_relieving"`
+	Designation           string           `gorm:"size:100;not null;default:''" json:"designation"`
+	Department            string           `gorm:"size:100;not null;default:''" json:"department"`
+	AddressLine           string           `gorm:"type:text" json:"address_line"`
+	City                  string           `gorm:"size:50;not null;default:''" json:"city"`
+	State                 string           `gorm:"size:50;not null;default:'Tamil Nadu'" json:"state"`
+	Pincode               string           `gorm:"size:10;not null;default:''" json:"pincode"`
+	PhotoPath             string           `gorm:"size:255;not null;default:''" json:"photo_path"`
+	EmergencyContactName  string           `gorm:"size:100;not null;default:''" json:"emergency_contact_name"`
+	EmergencyContactPhone string           `gorm:"size:20;not null;default:''" json:"emergency_contact_phone"`
+	PasswordHash          string           `gorm:"size:255;not null" json:"-"`
+	Role                  Role             `gorm:"type:enum('STAFF','ADMIN');not null;default:'STAFF'" json:"role"`
+	EmploymentStatus      EmploymentStatus `gorm:"type:enum('ACTIVE','RELIEVED','TEMPORARILY_BLOCKED');not null;default:'ACTIVE'" json:"employment_status"`
+	StatusRemarks         string           `gorm:"type:text" json:"status_remarks"`
+	BranchID              *uint            `gorm:"index;default:1" json:"branch_id"`
+	Branch                *Branch          `gorm:"foreignKey:BranchID" json:"branch,omitempty"`
+	Permissions           []Permission     `gorm:"many2many:user_permissions;" json:"permissions,omitempty"`
+	IsActive              bool             `gorm:"default:true;not null" json:"is_active"`
+	CreatedAt             time.Time        `gorm:"autoCreateTime" json:"created_at"`
+	UpdatedAt             time.Time        `gorm:"autoUpdateTime" json:"updated_at"`
+}
+
+type Permission struct {
+	ID          uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	Code        string    `gorm:"size:60;uniqueIndex;not null" json:"code"`
+	Module      string    `gorm:"size:40;index;not null" json:"module"`
+	Name        string    `gorm:"size:100;not null" json:"name"`
+	Description string    `gorm:"size:255;not null" json:"description"`
+	CreatedAt   time.Time `gorm:"autoCreateTime" json:"created_at"`
+}
+
+type UserPermission struct {
+	UserID       uint       `gorm:"primaryKey" json:"user_id"`
+	PermissionID uint       `gorm:"primaryKey" json:"permission_id"`
+	Permission   Permission `gorm:"foreignKey:PermissionID" json:"permission,omitempty"`
+	CreatedAt    time.Time  `gorm:"autoCreateTime" json:"created_at"`
 }
 
 type Donor struct {
@@ -420,4 +474,20 @@ type TrustHomeConfig struct {
 	CreatedAt     time.Time `gorm:"autoCreateTime" json:"created_at"`
 	UpdatedAt     time.Time `gorm:"autoUpdateTime" json:"updated_at"`
 }
+
+type StaffAttendance struct {
+	ID             uint             `gorm:"primaryKey;autoIncrement" json:"id"`
+	UserID         uint             `gorm:"not null;index" json:"user_id"`
+	User           *User            `gorm:"foreignKey:UserID" json:"user,omitempty"`
+	BranchID       uint             `gorm:"not null;default:1;index" json:"branch_id"`
+	Branch         *Branch          `gorm:"foreignKey:BranchID" json:"branch,omitempty"`
+	BusinessDate   time.Time        `gorm:"type:date;not null;index" json:"business_date"`
+	Status         AttendanceStatus `gorm:"type:enum('FULL_DAY','FIRST_HALF','SECOND_HALF','ABSENT','LEAVE');not null" json:"status"`
+	Remarks        string           `gorm:"size:255;default:''" json:"remarks"`
+	MarkedByUserID uint             `gorm:"not null" json:"marked_by_user_id"`
+	MarkedByUser   *User            `gorm:"foreignKey:MarkedByUserID" json:"marked_by_user,omitempty"`
+	CreatedAt      time.Time        `gorm:"autoCreateTime" json:"created_at"`
+	UpdatedAt      time.Time        `gorm:"autoUpdateTime" json:"updated_at"`
+}
+
 
