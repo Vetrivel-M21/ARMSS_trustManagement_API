@@ -483,7 +483,7 @@ func (h *DonationHandler) ApproveDonation(c *gin.Context) {
 	tx.Commit()
 
 	shared.SendSuccess(c, http.StatusOK, gin.H{
-		"message":  "Donation verified and approved successfully! 80G receipt is now unlocked.",
+		"message":  "Donation verified and approved successfully! Receipt is now unlocked.",
 		"donation": donation,
 		"voucher":  voucher,
 	})

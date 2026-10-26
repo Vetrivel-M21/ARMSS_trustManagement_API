@@ -228,7 +228,7 @@ func (h *PublicDonationHandler) CreatePublicDonation(c *gin.Context) {
 		return
 	}
 
-	// 5. Generate Voucher code in PENDING status (Official 80G receipt issued upon staff/admin approval)
+	// 5. Generate Voucher code in PENDING status (Official receipt issued upon staff/admin approval)
 	voucherNumber, err := shared.GenerateVoucherNumber(tx, bizDate)
 	if err == nil {
 		voucher := models.Voucher{
@@ -267,7 +267,7 @@ func (h *PublicDonationHandler) CreatePublicDonation(c *gin.Context) {
 		"account_name":        bankAccount.AccountName,
 		"reference_number":    refNum,
 		"verification_status": "PENDING",
-		"message":             fmt.Sprintf("Donation submitted successfully! Your payment reference (%s) is pending verification by %s staff. Your official 80G receipt will be unlocked once approved.", refNum, targetBranch.Name),
+		"message":             fmt.Sprintf("Donation submitted successfully! Your payment reference (%s) is pending verification by %s staff. Your official receipt will be unlocked once approved.", refNum, targetBranch.Name),
 	}
 
 	shared.SendSuccess(c, http.StatusCreated, response)
@@ -342,7 +342,7 @@ func (h *PublicDonationHandler) GetPublicDashboard(c *gin.Context) {
 	dashboardData := gin.H{
 		"trust_name":        "Nesakkaram Trust",
 		"tagline":           "Service to Humanity • Elderly Care, Children Welfare & Adoption",
-		"tax_exemption":     "80G Tax Exemption Certificate Available",
+		"tax_exemption":     "Official Trust Receipt Issued",
 		"active_schemes":    activeSchemesCount,
 		"total_donors":      totalDonorsCount,
 		"total_donations":   totalDonationsCount,
@@ -806,7 +806,7 @@ func (h *PublicDonationHandler) CashfreeReturn(c *gin.Context) {
         <div class="icon">✅</div>
         <h2>Payment Processed</h2>
         <p>Order Reference: <strong>%s</strong></p>
-        <p>Your online donation has been processed! Please return to the <strong>Nesakkaram Donor App</strong> to view your official Section 80G tax receipt and voucher.</p>
+        <p>Your online donation has been processed! Please return to the <strong>Nesakkaram Donor App</strong> to view your official receipt and voucher.</p>
     </div>
 </body>
 </html>`, orderID)
@@ -817,7 +817,7 @@ func (h *PublicDonationHandler) CashfreeReturn(c *gin.Context) {
 // VerifyAndIssueGatewayDonation completes the donation flow for payment gateway payments.
 // Because the transaction is already successfully verified by the payment gateway,
 // this endpoint immediately creates an ACTIVE donation, issues an official voucher and
-// 80G tax receipt, completely eliminating the need for manual admin confirmation.
+// donation receipt, completely eliminating the need for manual admin confirmation.
 func (h *PublicDonationHandler) VerifyAndIssueGatewayDonation(c *gin.Context) {
 	var req dto.VerifyAndIssueGatewayDonationRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -964,7 +964,7 @@ func (h *PublicDonationHandler) VerifyAndIssueGatewayDonation(c *gin.Context) {
 			"reference_number":    existingDonation.ReferenceNumber,
 			"verification_status": string(existingDonation.Status),
 			"is_verified":         true,
-			"message":             "Official 80G tax receipt already verified and issued.",
+			"message":             "Official receipt already verified and issued.",
 		})
 		return
 	}
@@ -1194,7 +1194,7 @@ func (h *PublicDonationHandler) VerifyAndIssueGatewayDonation(c *gin.Context) {
 		"reference_number":    refNum,
 		"verification_status": "VERIFIED",
 		"is_verified":         true,
-		"message":             fmt.Sprintf("Thank you! Your donation of Rs. %s has been successfully received and verified via payment gateway. Your official 80G tax receipt (Voucher #%s) is issued.", req.Amount.StringFixed(2), voucherNumber),
+		"message":             fmt.Sprintf("Thank you! Your donation of Rs. %s has been successfully received and verified via payment gateway. Your official receipt (Voucher #%s) is issued.", req.Amount.StringFixed(2), voucherNumber),
 	}
 
 	shared.SendSuccess(c, http.StatusCreated, response)
